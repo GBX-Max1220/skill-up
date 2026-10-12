@@ -61,7 +61,7 @@ func writeMarkdownJudgeDetails(sb *strings.Builder, in Input) {
 			sb.WriteString("\n")
 			if member.Result != nil {
 				for _, assertion := range member.Result.AssertionResults {
-					fmt.Fprintf(sb, "  - %t: %s", assertion.Passed, markdownText(assertion.Text))
+					fmt.Fprintf(sb, "  - %s: %s", markdownAssertionStatus(assertion), markdownText(assertion.Text))
 					if assertion.Evidence != "" {
 						fmt.Fprintf(sb, " — %s", markdownText(assertion.Evidence))
 					}
@@ -71,6 +71,16 @@ func writeMarkdownJudgeDetails(sb *strings.Builder, in Input) {
 		}
 		sb.WriteString("\n")
 	}
+}
+
+func markdownAssertionStatus(assertion judge.AssertionResult) judge.Status {
+	if assertion.Skipped {
+		return judge.StatusSkip
+	}
+	if assertion.Passed {
+		return judge.StatusPass
+	}
+	return judge.StatusFail
 }
 
 func writeMarkdownHeader(sb *strings.Builder, in Input) {
@@ -211,7 +221,11 @@ func writeMarkdownCaseDetails(sb *strings.Builder, cr CaseResult) {
 			if ar.Passed {
 				continue
 			}
-			fmt.Fprintf(sb, "- Failed: %s\n", markdownText(ar.Text))
+			label := "Failed"
+			if markdownAssertionStatus(ar) == judge.StatusSkip {
+				label = "Skipped"
+			}
+			fmt.Fprintf(sb, "- %s: %s\n", label, markdownText(ar.Text))
 			if ar.Evidence != "" {
 				fmt.Fprintf(sb, "  - Evidence: %s\n", markdownText(ar.Evidence))
 			}

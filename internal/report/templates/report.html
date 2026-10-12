@@ -108,6 +108,7 @@
     .assertion-status { font-weight: 600; margin-right: 0.5rem; }
     .assertion-status.a-pass { color: var(--green); }
     .assertion-status.a-fail { color: var(--red); }
+    .assertion-status.a-skip { color: var(--text-muted); }
     .assertion-evidence { color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem; padding-left: 1.5rem; }
 
     .prompt-box { background: #f8fafc; border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem 1rem; font-size: 0.875rem; color: #555; margin-bottom: 0.5rem; }
@@ -580,15 +581,18 @@
     function renderGradingBlock(g) {
       if (!g) return '<div style="color: var(--text-muted); font-style: italic;">No grading data</div>';
       var s = g.summary;
+      var skipped = g.expectations.filter(function(exp) { return exp.skipped; }).length;
       var passRate = Math.round(s.pass_rate * 100) + "%";
       var bc = s.pass_rate >= 0.8 ? "grade-pass" : s.pass_rate >= 0.5 ? "" : "grade-fail";
       var html = '<div class="grades-summary"><span class="grade-badge ' + bc + '">' + passRate + '</span>';
-      html += '<span>' + s.passed + ' passed, ' + s.failed + ' failed of ' + s.total + '</span></div>';
+      html += '<span>' + s.passed + ' passed, ' + (s.failed - skipped) + ' failed';
+      if (skipped) html += ', ' + skipped + ' skipped';
+      html += ' of ' + s.total + '</span></div>';
       html += '<ul class="assertion-list">';
       for (var i = 0; i < g.expectations.length; i++) {
         var exp = g.expectations[i];
-        var sc = exp.passed ? "a-pass" : "a-fail";
-        var icon = exp.passed ? "\u2713" : "\u2717";
+        var sc = exp.skipped ? "a-skip" : exp.passed ? "a-pass" : "a-fail";
+        var icon = exp.skipped ? "SKIP" : exp.passed ? "\u2713" : "\u2717";
         html += '<li class="assertion-item"><span class="assertion-status ' + sc + '">' + icon + '</span>';
         html += '<span>' + esc(exp.text) + '</span>';
         if (exp.evidence) html += '<div class="assertion-evidence">' + esc(exp.evidence) + '</div>';

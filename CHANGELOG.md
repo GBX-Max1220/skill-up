@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scoring now includes every configured failure and success rule, with success
   rules skipped after a failure rule matches. Case verdicts and agent-judge
   thresholds retain their existing semantics.
+- Display skipped assertions separately from evaluated failures in HTML,
+  Markdown, and benchmark Markdown reports, including HTML summary counts.
 
 ## [0.13.0] - 2026-10-09
 

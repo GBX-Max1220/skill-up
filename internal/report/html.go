@@ -133,6 +133,7 @@ type embeddedGrading struct {
 type embeddedExpectation struct {
 	Text     string `json:"text"`
 	Passed   bool   `json:"passed"`
+	Skipped  bool   `json:"skipped,omitempty"`
 	Evidence string `json:"evidence"`
 }
 
@@ -194,6 +195,7 @@ func caseResultToEmbeddedCase(cr CaseResult) embeddedCase {
 			eg.Expectations = append(eg.Expectations, embeddedExpectation{
 				Text:     ar.Text,
 				Passed:   ar.Passed,
+				Skipped:  ar.Skipped,
 				Evidence: ar.Evidence,
 			})
 		}
