@@ -903,6 +903,31 @@ Judges run sequentially in the same case runtime (`none`, Docker, or OpenSandbox
 
 The runtime filesystem is shared: a judge's changes are visible to later judges. Use read-only checks when every judge must observe unchanged output. Verdicts, timeouts, context materials and session artifacts are recorded separately under each judge's ID; this does not provide filesystem or external-service isolation. The case runtime is cleaned up after all judges finish, using the configured lifecycle policy.
 
+#### OpenSandbox shared-runtime verification
+
+OpenSandbox judges use the running case sandbox directly; they do not call native
+snapshot, restore, pause or resume APIs. Each Agent judge uses a fresh review
+session, while installed tools, filesystem changes and the case's network policy
+remain in the same sandbox. Cleanup follows the normal case lifecycle.
+
+To run the gated live-service test, configure `OPENSANDBOX_API_KEY`,
+`OPENSANDBOX_BASE_URL` and `OPENSANDBOX_IMAGE` in your environment:
+
+```bash
+SKILL_UP_OPENSANDBOX_JUDGE_E2E=1 go test -tags e2e -run TestOpenSandboxSharedJudgeEnvironment -v ./e2e
+```
+
+The test creates temporary sandboxes with a five-minute TTL and test metadata.
+It runs one Agent fixture, a script judge and two fresh Agent-judge fixture
+sessions sequentially. It checks shared file changes, setup and Agent-installed
+dependencies outside the workspace, environment configuration and per-judge
+material readback. It covers PASS/PASS/PASS and script FAIL / both Agent judges
+PASS / aggregate FAIL. The fixture exercises the actual judging pipeline without
+calling a model provider. Actual service egress enforcement requires a separate
+network test; this test does not claim external-service isolation.
+
+
+
 Reports show gates, member results, and the overall decision separately. `evaluation.json` stores the complete grouped result; `grading.json` contains one top-level expectation per judge for compatibility. Adding Agent criteria does not change a script judge's weight. Multiple cases can reference the same `script_path` today; packaging helper files with a script is a separate feature.
 
 ### judge: agent_judge — LLM rubric

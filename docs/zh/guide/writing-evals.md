@@ -780,6 +780,26 @@ eval 和 case 都可配置 `judges`。case 级列表整体替换 eval 级列表�
 
 文件系统由所有 judge 共享：前一个 judge 的修改会被后面的 judge 看到。需要评审原始输出时，请使用只读检查。各 judge 的判定、超时、上下文材料和会话产物仍按 ID 单独记录；这不代表文件系统或外部服务隔离。所有 judge 结束后再按配置清理 case runtime。
 
+#### OpenSandbox 共享环境验证
+
+OpenSandbox judge 直接复用 case 已启动的 sandbox，不调用原生快照、恢复、pause 或
+resume API。各 Agent judge 新开评审会话，工具、文件修改及 case 网络策略留在
+同一个 sandbox；结束后按普通 case 生命周期清理。
+
+通过环境提供 `OPENSANDBOX_API_KEY`、`OPENSANDBOX_BASE_URL` 和 `OPENSANDBOX_IMAGE`：
+
+```bash
+SKILL_UP_OPENSANDBOX_JUDGE_E2E=1 go test -tags e2e -run TestOpenSandboxSharedJudgeEnvironment -v ./e2e
+```
+
+测试创建带测试 metadata 和五分钟 TTL 的临时 sandbox，一次 Agent fixture 执行后，
+顺序执行一个 script judge 和两个新开的 Agent judge fixture 会话。覆盖共享文件修改、
+setup/Agent 安装到工作区外的依赖、环境配置和各 judge 材料读回，以及全通过和
+script FAIL / 两个 Agent judge PASS / 总体 FAIL。测试走真实评分链路但不调用模型服务。
+实际服务的 egress 执行效果需单独网络测试，不声称外部服务隔离。
+
+
+
 报告分别展示门控、各 judge 和总体结果。`evaluation.json` 保存完整分组结果；`grading.json` 为兼容格式，每个 judge 对应一个顶层断言。增加 Agent 评审标准不会改变脚本 judge 的权重。多个 case 现在即可引用同一个 `script_path`；连同辅助文件一起打包脚本属于后续功能。
 
 ### judge: agent_judge — LLM 评审
