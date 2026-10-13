@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Support explicit `judge.engine` configuration independent of the evaluated agent,
+  reusing engine/model connection resolution and provisioning the judge CLI in
+  isolated runtimes. Detect known judge protocol mismatches before agent execution.
 - Support independent `judges` on one case in the `none` runtime, combining
   reusable script checks and semantic Agent review of one execution. Results
   retain separate gate, judge, and overall decisions in reports.

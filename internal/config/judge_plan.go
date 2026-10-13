@@ -81,8 +81,11 @@ func mergeJudgePlanConfig(global, local JudgeConfig) JudgeConfig {
 	if local.Type == "" {
 		return global
 	}
-	if local.Model == "" {
+	if local.Model == "" && local.Engine == nil {
 		local.Model = global.Model
+		if local.Type == judgeTypeAgentJudge {
+			local.Engine = global.Engine
+		}
 	}
 	if local.PassThreshold == nil {
 		local.PassThreshold = global.PassThreshold

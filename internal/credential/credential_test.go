@@ -576,6 +576,39 @@ func captureLogOutput(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func TestResolveJudgeConfig_ExplicitEngineDoesNotInheritRunner(t *testing.T) {
+	for _, key := range []string{"OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"} {
+		t.Setenv(key, "")
+	}
+	for _, engineName := range []string{"codex", "claude-code", "custom-judge"} {
+		t.Run(engineName, func(t *testing.T) {
+			engine := &config.EngineConfig{
+				Name: engineName, Version: "1.2.3",
+				Model:  config.ModelConfig{Provider: "openai", Name: "judge-model"},
+				Kwargs: map[string]string{"judge-option": "yes"},
+			}
+			runner := ResolvedAgentConfig{
+				Engine: "codex", Version: "9.9.9", Provider: "openai", Model: "runner-model",
+				APIKey: "runner-key", BaseURL: "https://runner.example.test",
+				Kwargs:            map[string]string{"runner-option": "yes"},
+				Custom:            &config.CustomEngineConfig{Transport: "http"},
+				AppliedConnection: ResolvedModelConnection{Protocol: ProtocolOpenAI, APIKey: "runner-key"},
+			}
+			resolved := ResolveJudgeConfig(config.JudgeConfig{Type: "agent_judge", Engine: engine}, runner, nil)
+			if resolved.Role != AgentRoleJudge || resolved.Engine != engineName || resolved.Version != "1.2.3" || resolved.Model != "judge-model" {
+				t.Fatalf("unexpected judge config: %+v", resolved)
+			}
+			if resolved.APIKey != "" || resolved.BaseURL != "" || resolved.Custom != nil || resolved.AppliedConnection.Protocol != "" || resolved.Kwargs["runner-option"] != "" {
+				t.Fatalf("runner configuration leaked: %+v", resolved)
+			}
+			engine.Kwargs["judge-option"] = "changed"
+			if resolved.Kwargs["judge-option"] != "yes" {
+				t.Fatal("judge kwargs were not cloned")
+			}
+		})
+	}
+}
+
 func TestResolveJudgeConfig_FallsBackToRunnerWhenJudgeModelEmpty(t *testing.T) {
 	// Clear env vars that would override runner fallback.
 	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"} {

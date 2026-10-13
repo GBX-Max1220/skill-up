@@ -60,6 +60,12 @@ uses a separate Agent session over the same completed output. `all_required`
 requires both judges to pass. Benchmark mode also runs a separate `without_skill`
 configuration; that is a baseline evaluation, not a second execution for judging.
 
+The `relevance` judge selects its own OpenCode model and endpoint through
+`judges[].engine`, so runner engine/model CLI overrides do not change the reviewer.
+Its credentials still resolve from the DashScope provider configuration. In the
+`none` runtime, preinstall every selected runner and judge CLI. Multi-judge
+Docker/OpenSandbox snapshot support is a separate runtime extension.
+
 The prompt limits the project to `main.go`, `util.go`, and `README.md`, and gates
 check 3 files and 20 lines. This excludes OpenCode's installed Skill and generated
 configuration from project statistics. The reused script checks report formatting;

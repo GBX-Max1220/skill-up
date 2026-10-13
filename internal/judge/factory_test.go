@@ -362,3 +362,34 @@ func TestMergeJudgeConfig_NoCaseLevel(t *testing.T) {
 		t.Errorf("expected type rule_based, got %s", merged.Type)
 	}
 }
+
+func TestMergeJudgeConfig_IndependentEngineReplacement(t *testing.T) {
+	t.Parallel()
+	global := config.JudgeConfig{Type: "agent_judge", Engine: &config.EngineConfig{Name: "claude_code"}}
+	for _, local := range []config.JudgeConfig{
+		{Type: "agent_judge"},
+		{Type: "agent_judge", Model: "openai/case-model"},
+		{Type: "agent_judge", Engine: &config.EngineConfig{Name: "codex"}},
+		{Type: "script", ScriptPath: "check.sh"},
+	} {
+		merged := MergeJudgeConfig(global, local)
+		switch {
+		case local.Engine != nil:
+			if merged.Engine != local.Engine || merged.Model != "" {
+				t.Fatal("case engine was not a full replacement")
+			}
+		case local.Model != "" || local.Type == "script":
+			if merged.Engine != nil {
+				t.Fatal("unrelated engine inherited")
+			}
+		default:
+			if merged.Engine != global.Engine {
+				t.Fatal("default engine missing")
+			}
+		}
+	}
+	merged := MergeJudgeConfig(config.JudgeConfig{Type: "agent_judge", Model: "legacy"}, config.JudgeConfig{Type: "agent_judge", Engine: &config.EngineConfig{Name: "codex"}})
+	if merged.Model != "" {
+		t.Fatal("independent engine inherited legacy model")
+	}
+}

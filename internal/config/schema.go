@@ -186,6 +186,8 @@ type JudgeConfig struct {
 	Criteria   []string            `json:"criteria,omitempty"       yaml:"criteria,omitempty"`
 	Skills     []SkillRef          `json:"skills,omitempty"         yaml:"skills,omitempty"`
 	Context    *JudgeContextConfig `json:"context,omitempty" yaml:"context,omitempty"`
+	// Engine selects an independent judge agent. When absent, Model uses the runner engine.
+	Engine *EngineConfig `json:"engine,omitempty" yaml:"engine,omitempty"`
 	// PassThreshold is the minimum pass rate for agent_judge.
 	// Nil means "not configured", so the judge layer applies its default of 0.7.
 	// When set explicitly, the value must be in the inclusive range [0.0, 1.0].

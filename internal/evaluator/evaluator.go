@@ -470,14 +470,9 @@ func (e *defaultEvaluator) executeCaseOnce(ctx context.Context, caseCfg *config.
 		result.Status, result.Error = judge.StatusError, planErr
 		return result
 	}
-	if judgePlan.Multi {
-		result.AggregationStrategy = judge.DefaultOutcomeAggregator().Strategy()
-		if _, ok := rt.(runtime.JudgeSnapshotProvider); !ok {
-			recordSkippedJudges(&result, judgePlan, "unsupported_runtime")
-			result.Status = judge.StatusError
-			result.Error = fmt.Errorf("multi-judge workspace isolation is not supported by %T", rt)
-			return result
-		}
+	if err := e.validateJudgePlanRuntime(rt, judgePlan, &result); err != nil {
+		result.Status, result.Error = judge.StatusError, err
+		return result
 	}
 
 	// Multi-turn branch: delegate to dedicated engine when the case defines
@@ -812,10 +807,24 @@ func (e *defaultEvaluator) newJudgeForCase(
 	runAgent agent.Agent,
 ) (judge.Judge, error) {
 	judgeCfg = resolveJudgeScriptPath(e.judgeScriptBaseDir(), judgeCfg)
+	judgeCfg, err := config.ResolveJudgeEngineConfig(judgeCfg)
+	if err != nil {
+		return nil, err
+	}
 
 	judgeAgent, err := e.resolveJudgeAgent(ctx, judgeCfg, runAgent)
 	if err != nil {
 		return nil, err
+	}
+	if judgeCfg.Engine != nil {
+		if e.evalCfg.Environment.Type != "none" {
+			if err := judgeAgent.Install(ctx, rt); err != nil {
+				return nil, fmt.Errorf("failed to install judge agent %s: %w", judgeAgent.Name(), err)
+			}
+		}
+		if _, err := agent.Preflight(ctx, rt, judgeAgent); err != nil {
+			return nil, fmt.Errorf("judge agent %s preflight failed: %w", judgeAgent.Name(), err)
+		}
 	}
 	if err := e.removeDefaultRunSkillsBeforeJudge(ctx, rt, configName, judgeCfg, runAgent); err != nil {
 		return nil, err
@@ -948,11 +957,12 @@ func (e *defaultEvaluator) resolveJudgeAgent(ctx context.Context, judgeCfg confi
 	}
 
 	judgeAgent := runAgent
-	if e.evalCfg.Engine.Name != "" {
-		resolvedJudge := credential.ResolveJudgeConfig(judgeCfg, e.runnerConfig, e.resolver)
-		resolvedJudge = agent.ResolveAdapterConfig(resolvedJudge, e.resolver)
+	if judgeCfg.Engine != nil || e.evalCfg.Engine.Name != "" {
+		resolvedJudge, err := e.resolveJudgeAgentConfig(judgeCfg)
+		if err != nil {
+			return nil, err
+		}
 		agent.LogAdapterConfig(ctx, resolvedJudge)
-		var err error
 		judgeAgent, err = agentDetectWithResolvedConfig(resolvedJudge)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create judge agent: %w", err)
@@ -963,6 +973,43 @@ func (e *defaultEvaluator) resolveJudgeAgent(ctx context.Context, judgeCfg confi
 	}
 
 	return judgeAgent, nil
+}
+
+func (e *defaultEvaluator) resolveJudgeAgentConfig(judgeCfg config.JudgeConfig) (credential.ResolvedAgentConfig, error) {
+	judgeCfg, err := config.ResolveJudgeEngineConfig(judgeCfg)
+	if err != nil {
+		return credential.ResolvedAgentConfig{}, err
+	}
+	resolved := credential.ResolveJudgeConfig(judgeCfg, e.runnerConfig, e.resolver)
+	resolved = agent.ResolveAdapterConfig(resolved, e.resolver)
+	return resolved, agent.ValidateJudgeAdapterConfig(resolved, e.resolver)
+}
+
+func (e *defaultEvaluator) validateJudgePlanRuntime(rt runtime.Runtime, plan config.JudgePlan, result *EvalResult) error {
+	if plan.Multi {
+		result.AggregationStrategy = judge.DefaultOutcomeAggregator().Strategy()
+		if _, ok := rt.(runtime.JudgeSnapshotProvider); !ok {
+			recordSkippedJudges(result, plan, "unsupported_runtime")
+			return fmt.Errorf("multi-judge workspace isolation is not supported by %T", rt)
+		}
+	}
+	if err := e.validateJudgeAgents(plan); err != nil {
+		recordSkippedJudges(result, plan, "invalid_judge_config")
+		return err
+	}
+	return nil
+}
+
+func (e *defaultEvaluator) validateJudgeAgents(plan config.JudgePlan) error {
+	for _, member := range plan.Judges {
+		if member.Type != judgeTypeAgentJudge {
+			continue
+		}
+		if _, err := e.resolveJudgeAgentConfig(member); err != nil {
+			return fmt.Errorf("judge %q configuration: %w", member.ID, err)
+		}
+	}
+	return nil
 }
 
 func (e *defaultEvaluator) judgeScriptBaseDir() string {

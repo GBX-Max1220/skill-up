@@ -41,6 +41,7 @@ type mockAgent struct {
 	err          error
 	credErr      error
 	checkErr     error
+	installErr   error
 	inspectErr   error
 	observation  agent.RuntimeObservation
 	skillErr     error
@@ -66,7 +67,7 @@ func (m *mockAgent) SkillPath() string {
 
 func (m *mockAgent) Install(_ context.Context, _ runtime.Runtime) error {
 	m.installCall.Add(1)
-	return nil
+	return m.installErr
 }
 
 func (m *mockAgent) InstallMCP(_ context.Context, _ runtime.Runtime, _ runtime.MCPConfig) error {

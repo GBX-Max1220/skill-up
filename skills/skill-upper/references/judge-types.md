@@ -54,11 +54,26 @@ judge:
   pass_threshold: 0.7
 ```
 
-- This model example requires the OpenCode/DashScope engine and endpoint configuration in [eval-yaml.md](eval-yaml.md). Agent judges inherit the eval engine and endpoint.
+- This model example requires the OpenCode/DashScope engine and endpoint configuration in [eval-yaml.md](eval-yaml.md). Legacy `judge.model` uses the eval engine with provider-scoped connection resolution.
 - This consumes additional tokens and takes longer.
 - Make criteria specific and verifiable. Put deterministic checks in `expect` or `rule_based` where possible.
 - Put long or reusable domain rubrics in `judge.skills`. These Skills install only for the judge agent, never the agent under test. Installation requires native Skill support in the chosen Agent adapter; their contents are not appended to the prompt as a fallback.
 - `judge.skills[].include` and `exclude` use the same doublestar glob rules as top-level `skills`, relative to `path`, with `exclude` taking priority.
+
+For an independent agent, use `judge.engine` instead of `judge.model`:
+
+```yaml
+judge:
+  type: agent_judge
+  engine:
+    name: claude_code
+    model:
+      provider: anthropic
+      name: claude-sonnet-4-6
+  criteria: ["The result satisfies the task"]
+```
+
+The block uses the run engine schema, with required `name`, `model.provider`, and `model.name`. It does not inherit runner model, kwargs, version, custom config, or connection. Resolve credentials by its provider/protocol; never infer an engine from the provider. Case-level engine/model selections replace the eval selection. In `none`, preinstall the judge CLI. Docker/OpenSandbox install and check it during judging; their multi-judge snapshot support is still unavailable.
 
 ## script: custom check
 

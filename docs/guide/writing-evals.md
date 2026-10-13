@@ -922,6 +922,48 @@ judge:
   timeout_seconds: 60                        # Optional: bound a single judge call (0 = no judge-level deadline, parent case timeout still applies)
 ```
 
+To select a judge independently from the evaluated agent, replace `judge.model`
+with a complete `judge.engine` block:
+
+```yaml
+judge:
+  type: agent_judge
+  engine:
+    name: claude_code
+    model:
+      provider: anthropic
+      name: claude-sonnet-4-6
+  criteria:
+    - "The result satisfies the task requirements"
+```
+
+`judge.engine` and `judge.model` are mutually exclusive. An independent engine
+requires its own `name`, `model.provider`, and `model.name`; it supports the same
+`version`, `kwargs`, `model.base_url`, and `custom` fields and environment expansion
+as the run engine. It does not inherit the runner's model, CLI overrides, kwargs,
+custom configuration, or resolved connection. Credentials and endpoints resolve
+from the judge's own provider and adapter protocol using the existing credential
+configuration. No provider-to-engine inference is performed.
+
+Legacy `judge.model` keeps the runner engine and compatible provider-scoped
+fallbacks. Known native OpenAI/Anthropic protocol mismatches and model overrides
+that the adapter would discard fail before the evaluated agent runs. A gateway
+using a native provider name with another protocol must explicitly configure that
+protocol's endpoint in `credentials.yaml`.
+
+For a singular case-level `judge`, an explicit `engine` replaces the entire eval
+judge engine; an explicit legacy `model` selects the legacy mode. If neither is
+set, the eval's engine/model selection is inherited. `judges` lists retain their
+existing full-list replacement semantics; members do not inherit a singular
+judge's defaults.
+
+The judge continues to use the case runtime; there is no `judge.environment`.
+An independent judge's CLI is installed and checked in Docker/OpenSandbox during
+the judge phase, after the evaluated agent completes. In `none`, install all
+required CLIs beforehand; skill-up only checks them. Version selection follows
+the existing adapter rules. Single judges retain the existing shared-runtime
+behavior, and multi-judge isolation remains supported only by `none`.
+
 `judge.skills` is supported only for `agent_judge`. These Skills are installed
 into the judge agent, not the run agent, and top-level `skills` are not
 automatically installed into the judge. In benchmark mode, judge Skills are

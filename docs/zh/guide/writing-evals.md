@@ -799,6 +799,40 @@ judge:
   timeout_seconds: 60                        # 可选：限制单次 judge 调用时长（0 = 不加 judge 级 deadline，仍受 case timeout 约束）
 ```
 
+如果评审需要独立于被测 agent 选择 engine，请用完整的 `judge.engine` 替换 `judge.model`：
+
+```yaml
+judge:
+  type: agent_judge
+  engine:
+    name: claude_code
+    model:
+      provider: anthropic
+      name: claude-sonnet-4-6
+  criteria:
+    - "结果满足任务要求"
+```
+
+`judge.engine` 和 `judge.model` 互斥。独立配置要求填写 `name`、`model.provider` 和
+`model.name`；支持主运行 engine 的 `version`、`kwargs`、`model.base_url`、`custom`
+字段及环境变量展开。它不会继承 runner 的模型、CLI 覆盖、kwargs、custom 配置或已解析
+连接；凭据和 endpoint 按 judge 自己的 provider 与 adapter 协议，使用现有凭据配置解析。
+不会根据 provider 自动推断 engine。
+
+旧 `judge.model` 保留 runner engine 及兼容的 provider 范围内回退。已知原生
+OpenAI/Anthropic 协议冲突，以及 adapter 会忽略的评分模型，会在被测 agent 执行前报错。
+网关若使用原生 provider 名称提供另一种协议，需要在 `credentials.yaml` 中显式配置
+对应协议的 endpoint。
+
+单个 case 的 `judge.engine` 会整体替换 eval 的 judge engine；显式 `judge.model`
+切换为旧模式；两者都未指定时继承 eval 的 engine/model 选择。`judges` 列表仍整体替换，
+成员不会继承单个 judge 的默认配置。
+
+Judge 继续使用 case 的 runtime，不新增 `judge.environment`。独立 judge 的 CLI
+在 Docker/OpenSandbox 的评分阶段安装和检查，发生在被测 agent 完成之后。
+`none` 环境需要预先安装所需 CLI，skill-up 只检查可用性；版本选择遵循现有 adapter
+规则。单 judge 保留原有共享 runtime 行为，多 judge 隔离当前仍仅支持 `none`。
+
 `judge.skills` 仅支持 `agent_judge`。这些 Skills 会安装到 judge agent，
 不会安装到主运行 agent；顶层 `skills` 也不会自动安装到 judge。开启
 benchmark 时，`with_skill` 和 `without_skill` 都会安装 judge Skills，因为它们是

@@ -30,10 +30,15 @@ judges:
     type: script
     script_path: evals/fixtures/scripts/check-stats.sh
     timeout_seconds: 30
-  # 使用与运行 Agent 相同的已配置 provider 和 endpoint。
+  # Select the judge engine and endpoint independently of runner overrides.
   - id: relevance
     type: agent_judge
-    model: dashscope/qwen3.8-max
+    engine:
+      name: opencode
+      model:
+        provider: dashscope
+        name: qwen3.8-max
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     timeout_seconds: 180
     criteria:
       - "输出回应了统计当前项目代码构成的请求，包含文件数、行数和扩展名分布，而非仅解释如何统计。"

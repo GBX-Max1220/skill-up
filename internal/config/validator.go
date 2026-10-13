@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -271,6 +272,7 @@ func validateJudgeTypeAndLocalFields(judge JudgeConfig) []string {
 		errs = append(errs, "judge.skills is only supported when judge.type is agent_judge")
 	}
 	errs = append(errs, validateSkillRefs("judge.skills", judge.Skills)...)
+	errs = append(errs, validateJudgeEngine(judge)...)
 
 	errs = append(errs, validatePassThreshold(judge.PassThreshold)...)
 	errs = append(errs, validateJudgeContext(judge.Context)...)
@@ -283,6 +285,33 @@ func validateJudgeTypeAndLocalFields(judge JudgeConfig) []string {
 	errs = append(errs, validateRecognizableRules("judge.success", judge.Success)...)
 	errs = append(errs, validateRecognizableRules("judge.failure", judge.Failure)...)
 
+	return errs
+}
+
+func validateJudgeEngine(judge JudgeConfig) []string {
+	if judge.Engine == nil {
+		return nil
+	}
+	var errs []string
+	if judge.Type != judgeTypeAgentJudge {
+		errs = append(errs, "judge.engine is only supported when judge.type is agent_judge")
+	}
+	if judge.Model != "" {
+		errs = append(errs, "judge.model and judge.engine are mutually exclusive")
+	}
+	engine := *judge.Engine
+	engine.Custom = customengine.CloneConfig(engine.Custom)
+	engine.Model.Params = maps.Clone(engine.Model.Params)
+	resolved := EvalConfig{Engine: engine}
+	if err := ResolveCustomEngineConfig(&resolved); err != nil {
+		errs = append(errs, "judge.engine: "+err.Error())
+	}
+	if strings.TrimSpace(resolved.Engine.Name) == "" {
+		errs = append(errs, "judge.engine.name is required")
+	}
+	if strings.TrimSpace(resolved.Engine.Model.Provider) == "" || strings.TrimSpace(resolved.Engine.Model.Name) == "" {
+		errs = append(errs, "judge.engine.model.provider and judge.engine.model.name are required")
+	}
 	return errs
 }
 
@@ -352,7 +381,7 @@ func validateJudgeTypeAndRequiredFields(judge JudgeConfig) []string {
 	if judge.Type == judgeTypeScript && judge.ScriptPath == "" {
 		errs = append(errs, "judge.script_path is required when judge.type is script")
 	}
-	if judge.Type == judgeTypeAgentJudge && judge.Model == "" {
+	if judge.Type == judgeTypeAgentJudge && judge.Model == "" && judge.Engine == nil {
 		errs = append(errs, "judge.model is required when judge.type is agent_judge")
 	}
 	if judge.Type == judgeTypeAgentJudge && len(judge.Criteria) == 0 {
@@ -626,20 +655,23 @@ func validateConfiguredJudges(fields judgeFields) []string {
 }
 
 func mergeJudgeConfigForValidation(global, caseLevel JudgeConfig) JudgeConfig {
-	if caseLevel.Type != "" {
-		merged := caseLevel
-		if merged.Model == "" {
-			merged.Model = global.Model
-		}
-		if merged.PassThreshold == nil {
-			merged.PassThreshold = global.PassThreshold
-		}
-		if merged.TimeoutSeconds == nil {
-			merged.TimeoutSeconds = global.TimeoutSeconds
-		}
-		return merged
+	if caseLevel.Type == "" {
+		return global
 	}
-	return global
+	merged := caseLevel
+	if merged.Model == "" && merged.Engine == nil {
+		merged.Model = global.Model
+		if merged.Type == judgeTypeAgentJudge {
+			merged.Engine = global.Engine
+		}
+	}
+	if merged.PassThreshold == nil {
+		merged.PassThreshold = global.PassThreshold
+	}
+	if merged.TimeoutSeconds == nil {
+		merged.TimeoutSeconds = global.TimeoutSeconds
+	}
+	return merged
 }
 
 // duplicateCaseErrors reports duplicate source-file references and duplicate

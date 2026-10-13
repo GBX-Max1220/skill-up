@@ -7,6 +7,100 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestIndependentJudgeEngineValidation(t *testing.T) {
+	t.Parallel()
+	engine := &EngineConfig{Name: "claude_code", Model: ModelConfig{Provider: "anthropic", Name: "judge-model"}}
+	for _, test := range []struct {
+		name    string
+		judge   JudgeConfig
+		wantErr string
+	}{
+		{"valid", JudgeConfig{Type: "agent_judge", Engine: engine, Criteria: []string{"quality"}}, ""},
+		{"mixed-model", JudgeConfig{Type: "agent_judge", Engine: engine, Model: "old", Criteria: []string{"quality"}}, "mutually exclusive"},
+		{"wrong-type", JudgeConfig{Type: "script", Engine: engine, ScriptPath: "check.sh"}, "only supported"},
+		{"empty-engine", JudgeConfig{Type: "agent_judge", Engine: &EngineConfig{}, Criteria: []string{"quality"}}, "judge.engine.name is required"},
+		{"missing-model", JudgeConfig{Type: "agent_judge", Engine: &EngineConfig{Name: "codex"}, Criteria: []string{"quality"}}, "judge.engine.model.provider"},
+		{"custom-missing", JudgeConfig{Type: "agent_judge", Engine: &EngineConfig{Name: "my-judge", Model: engine.Model}, Criteria: []string{"quality"}}, "missing engine.custom"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			caseCfg := &CaseConfig{ID: "case", Input: Input{Prompt: "task"}, Judge: test.judge}
+			err := NewValidator().ValidateCasesWithEvalDefaults(&EvalConfig{}, []*CaseConfig{caseCfg})
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validation=%v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestIndependentJudgeEngineInheritance(t *testing.T) {
+	t.Parallel()
+	engine := &EngineConfig{Name: "claude_code", Model: ModelConfig{Provider: "anthropic", Name: "judge-model"}}
+	global := JudgeConfig{Type: "agent_judge", Engine: engine, Criteria: []string{"quality"}}
+	for _, local := range []JudgeConfig{
+		{Type: "agent_judge", Criteria: []string{"case quality"}},
+		{Type: "agent_judge", Model: "openai/local-model", Criteria: []string{"case quality"}},
+		{Type: "agent_judge", Engine: &EngineConfig{Name: "codex", Model: ModelConfig{Provider: "openai", Name: "local-model"}}, Criteria: []string{"case quality"}},
+	} {
+		plan, err := ResolveJudgePlan(&EvalConfig{Judge: global}, &CaseConfig{Judge: local})
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged := plan.Judges[0]
+		if local.Model != "" && merged.Engine != nil {
+			t.Fatal("legacy model inherited independent engine")
+		}
+		if local.Model == "" && local.Engine == nil && merged.Engine != engine {
+			t.Fatal("missing default engine")
+		}
+		if local.Engine != nil && merged.Engine != local.Engine {
+			t.Fatal("case engine was not replaced")
+		}
+		if err := NewValidator().ValidateCasesWithEvalDefaults(&EvalConfig{Judge: global}, []*CaseConfig{{Input: Input{Prompt: "task"}, Judge: local}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestIndependentJudgeEngineYAML(t *testing.T) {
+	t.Parallel()
+	var eval EvalConfig
+	if err := yaml.Unmarshal([]byte("judge:\n  type: agent_judge\n  engine:\n    name: claude-code\n    version: 1.2.3\n    model:\n      provider: anthropic\n      name: judge-model\n    kwargs:\n      option: value\n  criteria: [quality]\n"), &eval); err != nil {
+		t.Fatal(err)
+	}
+	if eval.Judge.Engine == nil || eval.Judge.Engine.Name != "claude-code" || eval.Judge.Engine.Version != "1.2.3" || eval.Judge.Engine.Kwargs["option"] != "value" {
+		t.Fatalf("judge=%+v", eval.Judge)
+	}
+}
+
+func TestResolveIndependentJudgeEngineEnvironment(t *testing.T) {
+	t.Setenv("JUDGE_PROVIDER", "gateway")
+	t.Setenv("JUDGE_MODEL", "review-model")
+	t.Setenv("JUDGE_COMMAND", "judge-cli")
+	t.Setenv("JUDGE_TRANSPORT", "local")
+	input := JudgeConfig{Type: "agent_judge", Engine: &EngineConfig{
+		Name: "custom-judge", Model: ModelConfig{Provider: "${JUDGE_PROVIDER}", Name: "${JUDGE_MODEL}"},
+		Custom: &CustomEngineConfig{Transport: "${JUDGE_TRANSPORT}", Local: &CustomLocalConfig{Command: "${JUDGE_COMMAND}", Args: []string{"${model}"}}},
+	}}
+	if err := NewValidator().ValidateCasesWithEvalDefaults(&EvalConfig{}, []*CaseConfig{{Input: Input{Prompt: "task"}, Judge: JudgeConfig{Type: input.Type, Engine: input.Engine, Criteria: []string{"quality"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveJudgeEngineConfig(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Engine.Model.Provider != "gateway" || resolved.Engine.Model.Name != "review-model" || resolved.Engine.Custom.Local.Command != "judge-cli" || resolved.Engine.Custom.Local.Args[0] != "${model}" {
+		t.Fatalf("engine=%+v", resolved.Engine)
+	}
+	if input.Engine.Model.Name != "${JUDGE_MODEL}" || input.Engine.Custom.Local.Command != "${JUDGE_COMMAND}" {
+		t.Fatal("input engine mutated")
+	}
+}
+
 func TestResolveJudgePlanInheritanceAndIdentity(t *testing.T) {
 	t.Parallel()
 	global := []JudgeConfig{{ID: "functional", Type: "script", ScriptPath: "check.sh"}, {ID: "semantic", Type: "agent_judge", Model: "test", Criteria: []string{"quality"}}}

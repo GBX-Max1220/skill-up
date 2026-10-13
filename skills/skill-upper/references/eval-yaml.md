@@ -74,6 +74,8 @@ report:
 
 `judge.skills` is supported only with `judge.type: agent_judge`. These reusable rubric Skills install for the judge, not the run agent. Top-level `skills` are not automatically installed for the judge. Both `with_skill` and `without_skill` benchmark runs install judge Skills because they are scoring tools. Paths are resolved relative to the Skill root. Installation requires native Skill support in the selected Agent adapter; do not paste Skill contents into `criteria`.
 
+`judge.engine` selects an independent judge agent using the same schema as `engine`. It requires `name`, `model.provider`, and `model.name` and is mutually exclusive with legacy `judge.model`; runner CLI/model/kwargs/connection settings do not flow into it. See [judge-types.md](judge-types.md) for configuration and runtime requirements.
+
 ## Execution environments
 
 | Type | Use | Requirements |
