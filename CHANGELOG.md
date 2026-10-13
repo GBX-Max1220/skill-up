@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Deliver built-in CLI agent prompts through files on Windows targets to avoid
+  MSYS2 bash truncating quoted command arguments near 8 KiB, including long
+  `agent_judge` prompts. Linux sandbox targets retain the configured inline
+  threshold even when skill-up runs on a Windows host.
+
 ### Added
 - Support independent `judges` on one case in the `none` runtime, combining
   reusable script checks and semantic Agent review of one execution. Results
