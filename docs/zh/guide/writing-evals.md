@@ -798,6 +798,19 @@ setup/Agent 安装到工作区外的依赖、环境配置和各 judge 材料读�
 script FAIL / 两个 Agent judge PASS / 总体 FAIL。测试走真实评分链路但不调用模型服务。
 实际服务的 egress 执行效果需单独网络测试，不声称外部服务隔离。
 
+若要验证真实 OpenCode provider 链路，还需注入 `JUDGE_LIVE_API_KEY`，并设置
+OpenAI 兼容服务的 `SKILL_UP_OPENCODE_JUDGE_BASE_URL` 和
+`SKILL_UP_OPENCODE_JUDGE_MODEL`，然后运行：
+
+```bash
+SKILL_UP_OPENCODE_JUDGE_E2E=1 go test -count=1 -tags e2e -run '^TestOpenSandboxOpenCodeJudgeProvider$' -v ./e2e
+```
+
+该测试启动真实 OpenCode CLI 并请求模型服务。runner fixture 预置冲突的 provider
+端点和 key，两个独立 judge 必须覆盖它们、评分通过并返回不同 session ID。
+临时 sandbox 使用十五分钟 TTL 并正常删除。可用 `SKILL_UP_OPENCODE_JUDGE_VERSION`
+固定 OpenCode 版本（已验证 `1.14.24`）。
+
 
 
 报告分别展示门控、各 judge 和总体结果。`evaluation.json` 保存完整分组结果；`grading.json` 为兼容格式，每个 judge 对应一个顶层断言。增加 Agent 评审标准不会改变脚本 judge 的权重。多个 case 现在即可引用同一个 `script_path`；连同辅助文件一起打包脚本属于后续功能。

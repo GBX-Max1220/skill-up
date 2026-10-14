@@ -926,6 +926,20 @@ PASS / aggregate FAIL. The fixture exercises the actual judging pipeline without
 calling a model provider. Actual service egress enforcement requires a separate
 network test; this test does not claim external-service isolation.
 
+To verify the real OpenCode provider path, also inject `JUDGE_LIVE_API_KEY`,
+set `SKILL_UP_OPENCODE_JUDGE_BASE_URL` and `SKILL_UP_OPENCODE_JUDGE_MODEL` for an
+OpenAI-compatible provider, then run:
+
+```bash
+SKILL_UP_OPENCODE_JUDGE_E2E=1 go test -count=1 -tags e2e -run '^TestOpenSandboxOpenCodeJudgeProvider$' -v ./e2e
+```
+
+This separate test starts the real OpenCode CLI and makes live model requests.
+The runner fixture seeds a conflicting provider endpoint and key; two independent
+judges must override them, pass their rubric and return different session IDs.
+It uses a fifteen-minute sandbox TTL and normal case deletion. Optionally pin
+OpenCode with `SKILL_UP_OPENCODE_JUDGE_VERSION` (validated with `1.14.24`).
+
 
 
 Reports show gates, member results, and the overall decision separately. `evaluation.json` stores the complete grouped result; `grading.json` contains one top-level expectation per judge for compatibility. Adding Agent criteria does not change a script judge's weight. Multiple cases can reference the same `script_path` today; packaging helper files with a script is a separate feature.
