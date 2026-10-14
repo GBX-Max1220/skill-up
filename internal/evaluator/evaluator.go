@@ -825,9 +825,7 @@ func (e *defaultEvaluator) newJudgeForCase(
 		if _, err := agent.Preflight(ctx, rt, judgeAgent); err != nil {
 			return nil, fmt.Errorf("judge agent %s preflight failed: %w", judgeAgent.Name(), err)
 		}
-		// Initialize adapter-specific provider configuration while preserving the
-		// case MCP configuration already installed in the runtime.
-		if err := judgeAgent.InstallMCP(ctx, rt, runtime.MCPConfig{}); err != nil {
+		if err := initializeJudgeAgentConfig(ctx, rt, judgeAgent); err != nil {
 			return nil, fmt.Errorf("failed to initialize judge agent %s runtime configuration: %w", judgeAgent.Name(), err)
 		}
 	}
@@ -844,6 +842,13 @@ func (e *defaultEvaluator) newJudgeForCase(
 	}
 
 	return j, nil
+}
+
+func initializeJudgeAgentConfig(ctx context.Context, rt runtime.Runtime, judgeAgent agent.Agent) error {
+	if openCode, ok := judgeAgent.(*agent.OpenCodeAgent); ok {
+		return openCode.InstallJudgeConfig(ctx, rt)
+	}
+	return judgeAgent.InstallMCP(ctx, rt, runtime.MCPConfig{})
 }
 
 func (e *defaultEvaluator) installJudgeSkills(ctx context.Context, rt runtime.Runtime, judgeCfg config.JudgeConfig, judgeAgent agent.Agent) error {

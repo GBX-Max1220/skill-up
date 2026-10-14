@@ -265,3 +265,81 @@ func assertOpenCodeJudgeConfiguration(ctx context.Context, t *testing.T, rt runt
 		t.Fatal("API key embedded in config")
 	}
 }
+
+func TestIndependentOpenCodeJudgeDefaultEndpoint(t *testing.T) {
+	for _, provider := range []string{"openai", "anthropic"} {
+		for _, endpoint := range []string{"", "https://judge.example/v1"} {
+			t.Run(provider+"/"+endpoint, func(t *testing.T) {
+				for _, suffix := range []string{"_BASE_URL", "_API_KEY", "_MODEL", "_AUTH_TOKEN"} {
+					t.Setenv(strings.ToUpper(provider)+suffix, "")
+				}
+				ctx := context.Background()
+				initial := strings.ReplaceAll(`{"plugin":["keep-plugin"],"permission":{"bash":"ask"},"mcp":{"keep":{"type":"remote","url":"https://mcp.example"}},"provider":{"SELECTED":{"options":{"baseURL":"https://runner.example/v1","apiKey":"runner-test-key"}},"other":{"options":{"baseURL":"https://other.example/v1"}}}}`, "SELECTED", provider)
+				underlying, err := runtime.NewRuntime(runtime.Config{Type: "none", WorkspaceDir: t.TempDir(), Env: map[string]string{"OPENCODE_CONFIG_CONTENT": initial}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := underlying.Create(ctx); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = underlying.Close() })
+				current := &openCodeJudgePreflightRuntime{Runtime: underlying}
+				e := newTestEvaluator(EvalOptions{EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}}, RunnerConfig: credential.ResolvedAgentConfig{Engine: "opencode", Provider: provider, BaseURL: "https://runner.example/v1", APIKey: "runner-test-key"}})
+				cfg := config.JudgeConfig{Type: "agent_judge", Engine: &config.EngineConfig{Name: "opencode", Model: config.ModelConfig{Provider: provider, Name: "judge-model", BaseURL: endpoint}}, Criteria: []string{"quality"}}
+				resolved, err := e.resolveJudgeAgentConfig(cfg)
+				if err != nil || resolved.BaseURL != endpoint || resolved.APIKey != "" {
+					t.Fatalf("independent connection resolution error: %v", err)
+				}
+				if _, err := e.newJudgeForCase(ctx, current, "without_skill", cfg, &mockAgent{name: "opencode"}); err != nil {
+					t.Fatal(err)
+				}
+				read, err := current.Exec(ctx, `printf '%s' "$OPENCODE_CONFIG_CONTENT"`, runtime.ExecOptions{})
+				if err != nil || read.ExitCode != 0 {
+					t.Fatalf("read configuration: %v", err)
+				}
+				assertIndependentOpenCodeRouting(t, read.Stdout, provider, endpoint)
+			})
+		}
+	}
+}
+
+type openCodeJudgePreflightRuntime struct{ runtime.Runtime }
+
+func (r *openCodeJudgePreflightRuntime) Exec(ctx context.Context, command string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+	switch command {
+	case "command -v opencode":
+		return runtime.ExecResult{Stdout: "/fixture/opencode"}, nil
+	case "opencode --version":
+		return runtime.ExecResult{Stdout: "1.14.24"}, nil
+	default:
+		return r.Runtime.Exec(ctx, command, opts)
+	}
+}
+
+func assertIndependentOpenCodeRouting(t *testing.T, content, provider, endpoint string) {
+	t.Helper()
+	var value struct {
+		Plugin     []string                   `json:"plugin"`
+		Permission map[string]string          `json:"permission"`
+		MCP        map[string]json.RawMessage `json:"mcp"`
+		Provider   map[string]struct {
+			Options struct {
+				BaseURL string `json:"baseURL"`
+				APIKey  string `json:"apiKey"`
+			} `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(content), &value); err != nil {
+		t.Fatal(err)
+	}
+	selected, exists := value.Provider[provider]
+	if endpoint == "" && exists {
+		t.Fatal("default endpoint judge inherited runner provider configuration")
+	}
+	if endpoint != "" && (!exists || selected.Options.BaseURL != endpoint || selected.Options.APIKey != "") {
+		t.Fatal("explicit endpoint judge inherited runner connection")
+	}
+	if value.MCP["keep"] == nil || value.Provider["other"].Options.BaseURL != "https://other.example/v1" || len(value.Plugin) != 1 || value.Plugin[0] != "keep-plugin" || value.Permission["bash"] != "ask" {
+		t.Fatal("unrelated runtime configuration was lost")
+	}
+}

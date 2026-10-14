@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retain separate gate, judge, and overall decisions in reports.
 
 ### Fixed
-- Initialize independent OpenCode judges with their own provider endpoint and API-key binding.
+- Initialize independent OpenCode judges with their own provider endpoint and API-key binding,
+  clearing runner-derived provider settings when the judge selects the default endpoint.
 - Traverse symlinked workspace roots and reject escaping symlink chains when
   capturing independent judge snapshots.
 - Reject Git metadata pointer files in judge snapshots, preventing linked
