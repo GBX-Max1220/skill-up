@@ -816,14 +816,19 @@ func (e *defaultEvaluator) newJudgeForCase(
 	if err != nil {
 		return nil, err
 	}
-	if judgeCfg.Engine != nil {
-		if e.evalCfg.Environment.Type != "none" {
-			if err := judgeAgent.Install(ctx, rt); err != nil {
-				return nil, fmt.Errorf("failed to install judge agent %s: %w", judgeAgent.Name(), err)
-			}
+	if judgeCfg.Engine != nil && e.evalCfg.Environment.Type != "none" {
+		if err := judgeAgent.Install(ctx, rt); err != nil {
+			return nil, fmt.Errorf("failed to install judge agent %s: %w", judgeAgent.Name(), err)
 		}
+	}
+	if judgeCfg.Engine != nil {
 		if _, err := agent.Preflight(ctx, rt, judgeAgent); err != nil {
 			return nil, fmt.Errorf("judge agent %s preflight failed: %w", judgeAgent.Name(), err)
+		}
+		// Initialize adapter-specific provider configuration while preserving the
+		// case MCP configuration already installed in the runtime.
+		if err := judgeAgent.InstallMCP(ctx, rt, runtime.MCPConfig{}); err != nil {
+			return nil, fmt.Errorf("failed to initialize judge agent %s runtime configuration: %w", judgeAgent.Name(), err)
 		}
 	}
 	if err := e.removeDefaultRunSkillsBeforeJudge(ctx, rt, configName, judgeCfg, runAgent); err != nil {

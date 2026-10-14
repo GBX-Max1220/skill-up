@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -174,5 +175,93 @@ func independentJudgeWorkspaceCheck(t *testing.T, workspace, engine string) func
 			return nil, err
 		}
 		return &agent.SessionResult{FinalMessage: `{"results":[{"criterion_id":"criterion-1","passed":true,"evidence":["checked"],"failures":[]}]}`}, nil
+	}
+}
+
+func TestIndependentOpenCodeJudgeProviderConfiguration(t *testing.T) {
+	for _, provider := range []string{"openai", "review-provider"} {
+		for _, runner := range []string{"codex", "opencode"} {
+			t.Run(provider+"/"+runner, func(t *testing.T) {
+				ctx := context.Background()
+				rt, err := runtime.NewRuntime(runtime.Config{Type: "none", WorkspaceDir: t.TempDir()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := rt.Create(ctx); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = rt.Close() })
+				rt.MergeEnv(map[string]string{"OPENCODE_CONFIG_CONTENT": `{"mcp":{"existing":{"type":"remote","url":"https://mcp.example"}},"provider":{"openai":{"options":{"baseURL":"https://runner.example/v1"}},"review-provider":{"options":{"baseURL":"https://runner.example/v1"}}}}`})
+				judgeAgent := agent.NewOpenCodeAgent(agent.Config{Name: "opencode", CheckCmd: "true", VersionCmd: "printf test", ModelProvider: provider, ModelName: "judge-model", BaseURL: "https://judge.example/v1", APIKey: "judge-test-key"})
+				original := agentDetectWithResolvedConfig
+				agentDetectWithResolvedConfig = func(credential.ResolvedAgentConfig) (agent.Agent, error) { return judgeAgent, nil }
+				t.Cleanup(func() { agentDetectWithResolvedConfig = original })
+				e := newTestEvaluator(EvalOptions{EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}}})
+				_, err = e.newJudgeForCase(ctx, rt, "without_skill", config.JudgeConfig{Type: "agent_judge", Engine: &config.EngineConfig{Name: "opencode", Model: config.ModelConfig{Provider: provider, Name: "judge-model", BaseURL: "https://judge.example/v1"}}, Criteria: []string{"quality"}}, &mockAgent{name: runner})
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := rt.Exec(ctx, `printf '%s' "$OPENCODE_CONFIG_CONTENT"`, runtime.ExecOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertOpenCodeJudgeConfiguration(ctx, t, rt, provider, result.Stdout)
+			})
+		}
+	}
+}
+
+func TestIndependentJudgeRuntimeConfigurationFailure(t *testing.T) {
+	ctx := context.Background()
+	rt, err := runtime.NewRuntime(runtime.Config{Type: "none", WorkspaceDir: t.TempDir(), Env: map[string]string{"OPENCODE_CONFIG_CONTENT": "invalid-json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Create(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	original := agentDetectWithResolvedConfig
+	agentDetectWithResolvedConfig = func(credential.ResolvedAgentConfig) (agent.Agent, error) {
+		return agent.NewOpenCodeAgent(agent.Config{Name: "opencode", CheckCmd: "true", VersionCmd: "printf test", BaseURL: "https://judge.example/v1"}), nil
+	}
+	t.Cleanup(func() { agentDetectWithResolvedConfig = original })
+	e := newTestEvaluator(EvalOptions{EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}}})
+	_, err = e.newJudgeForCase(ctx, rt, "without_skill", config.JudgeConfig{Type: "agent_judge", Engine: &config.EngineConfig{Name: "opencode", Model: config.ModelConfig{Provider: "openai", Name: "judge-model"}}, Criteria: []string{"quality"}}, &mockAgent{name: "runner"})
+	if err == nil || !strings.Contains(err.Error(), "failed to initialize judge agent") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func assertOpenCodeJudgeConfiguration(ctx context.Context, t *testing.T, rt runtime.Runtime, provider, content string) {
+	t.Helper()
+	var value struct {
+		Provider map[string]struct {
+			Options struct {
+				BaseURL string `json:"baseURL"`
+				APIKey  string `json:"apiKey"`
+			} `json:"options"`
+			Models map[string]any `json:"models"`
+		} `json:"provider"`
+		MCP map[string]any `json:"mcp"`
+	}
+	if err := json.Unmarshal([]byte(content), &value); err != nil {
+		t.Fatal(err)
+	}
+	entry := value.Provider[provider]
+	if entry.Options.BaseURL != "https://judge.example/v1" || value.MCP["existing"] == nil {
+		t.Fatalf("judge endpoint or MCP configuration lost: %s", content)
+	}
+	if provider == "review-provider" {
+		if entry.Options.APIKey != "{env:SKILL_UP_OPENCODE_API_KEY}" || entry.Models["judge-model"] == nil {
+			t.Fatalf("custom provider binding missing: %s", content)
+		}
+		key, err := rt.Exec(ctx, `test "$SKILL_UP_OPENCODE_API_KEY" = judge-test-key`, runtime.ExecOptions{})
+		if err != nil || key.ExitCode != 0 {
+			t.Fatalf("judge API key binding missing: %v", err)
+		}
+	}
+	if strings.Contains(content, "judge-test-key") {
+		t.Fatal("API key embedded in config")
 	}
 }
