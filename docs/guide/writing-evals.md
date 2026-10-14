@@ -940,6 +940,23 @@ judges must override them, pass their rubric and return different session IDs.
 It uses a fifteen-minute sandbox TTL and normal case deletion. Optionally pin
 OpenCode with `SKILL_UP_OPENCODE_JUDGE_VERSION` (validated with `1.14.24`).
 
+To exercise an omitted `judge.engine.model.base_url`, set
+`SKILL_UP_OPENCODE_JUDGE_PROVIDER=openai` (or `anthropic`), leave
+`SKILL_UP_OPENCODE_JUDGE_BASE_URL` unset, and supply the native provider's model
+and key through the same variables. The test still seeds a conflicting runner
+provider; the independent judge must use its native default endpoint. Provider
+initialization removes the selected provider's inherited inline settings while
+preserving case MCP configuration, unrelated providers and other OpenCode settings.
+
+A separate configuration-only smoke test installs and preflights the real
+OpenCode CLI in an OpenSandbox, resets a conflicting OpenAI provider, and reads
+back the preserved MCP and unrelated provider settings. It needs the sandbox
+variables above but no model-provider key or native-provider connectivity:
+
+```bash
+SKILL_UP_OPENCODE_CONFIG_E2E=1 go test -count=1 -tags e2e -run '^TestOpenSandboxOpenCodeDefaultRouting$' -v ./e2e
+```
+
 
 
 Reports show gates, member results, and the overall decision separately. `evaluation.json` stores the complete grouped result; `grading.json` contains one top-level expectation per judge for compatibility. Adding Agent criteria does not change a script judge's weight. Multiple cases can reference the same `script_path` today; packaging helper files with a script is a separate feature.

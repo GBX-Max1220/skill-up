@@ -811,6 +811,21 @@ SKILL_UP_OPENCODE_JUDGE_E2E=1 go test -count=1 -tags e2e -run '^TestOpenSandboxO
 临时 sandbox 使用十五分钟 TTL 并正常删除。可用 `SKILL_UP_OPENCODE_JUDGE_VERSION`
 固定 OpenCode 版本（已验证 `1.14.24`）。
 
+若要覆盖省略 `judge.engine.model.base_url` 的场景，设置
+`SKILL_UP_OPENCODE_JUDGE_PROVIDER=openai`（或 `anthropic`），不设置
+`SKILL_UP_OPENCODE_JUDGE_BASE_URL`，并通过相同变量提供原生服务的模型和 key。
+测试仍预置冲突的 runner provider，独立 judge 必须使用原生默认端点。
+初始化只移除所选 provider 的遗留 inline 配置，保留 case MCP、其他 provider
+及 OpenCode 的其他设置。
+
+另有配置读回 smoke test，在真实 OpenSandbox 安装并预检 OpenCode，重置冲突的
+OpenAI provider，再读回 MCP 和其他 provider 的保留状态。只需上述 sandbox 变量，
+不需要模型 key 或原生模型服务的可达性：
+
+```bash
+SKILL_UP_OPENCODE_CONFIG_E2E=1 go test -count=1 -tags e2e -run '^TestOpenSandboxOpenCodeDefaultRouting$' -v ./e2e
+```
+
 
 
 报告分别展示门控、各 judge 和总体结果。`evaluation.json` 保存完整分组结果；`grading.json` 为兼容格式，每个 judge 对应一个顶层断言。增加 Agent 评审标准不会改变脚本 judge 的权重。多个 case 现在即可引用同一个 `script_path`；连同辅助文件一起打包脚本属于后续功能。
