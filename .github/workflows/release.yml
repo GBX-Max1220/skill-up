@@ -114,8 +114,11 @@ jobs:
           version: "v2.17.0"
           # Build once without publishing. The protected job below publishes
           # these exact files after approval; it never recompiles them.
-          args: release --clean --skip=publish
+          args: release --clean --skip=publish --parallelism=1
         env:
+          # Match the snapshot build's memory budget on 16 GiB runners.
+          GOMAXPROCS: "2"
+          GOFLAGS: "-p=2"
           # The changelog provider reads repository history through the API.
           # This token is read-only in the build job and cannot publish.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
