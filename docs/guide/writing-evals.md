@@ -948,6 +948,16 @@ provider; the independent judge must use its native default endpoint. Provider
 initialization removes the selected provider's inherited inline settings while
 preserving case MCP configuration, unrelated providers and other OpenCode settings.
 
+For a local HTTP-routing regression with OpenCode installed, run:
+
+```bash
+SKILL_UP_OPENCODE_ORDER_E2E=1 go test -count=1 -tags e2e -run '^TestOpenCodeJudgeConnectionOrder$' -v ./e2e
+```
+
+This test uses two loopback recording endpoints with fixture keys and fixed HTTP
+400 responses. It checks independent/legacy judge ordering against actual CLI
+requests without a model service; it does not test successful model grading.
+
 A separate configuration-only smoke test installs and preflights the real
 OpenCode CLI in an OpenSandbox, resets a conflicting OpenAI provider, and reads
 back the preserved MCP and unrelated provider settings. It needs the sandbox

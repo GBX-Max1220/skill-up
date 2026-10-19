@@ -131,7 +131,7 @@ func (a *OpenCodeAgent) InstallMCP(ctx context.Context, rt Runtime, mcpCfg runti
 }
 
 // InstallJudgeConfig replaces the selected provider's inherited inline settings
-// before initializing an independent judge, preserving MCP and other providers.
+// before initializing a judge, preserving MCP and other providers.
 func (a *OpenCodeAgent) InstallJudgeConfig(ctx context.Context, rt Runtime) error {
 	configValue, err := readOpenCodeRuntimeConfig(ctx, rt)
 	if err != nil {

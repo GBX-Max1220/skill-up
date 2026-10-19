@@ -818,6 +818,15 @@ SKILL_UP_OPENCODE_JUDGE_E2E=1 go test -count=1 -tags e2e -run '^TestOpenSandboxO
 初始化只移除所选 provider 的遗留 inline 配置，保留 case MCP、其他 provider
 及 OpenCode 的其他设置。
 
+本地已安装 OpenCode 时，可运行真实 HTTP 路由回归：
+
+```bash
+SKILL_UP_OPENCODE_ORDER_E2E=1 go test -count=1 -tags e2e -run '^TestOpenCodeJudgeConnectionOrder$' -v ./e2e
+```
+
+测试使用两个 loopback 记录端点、fixture key 和固定 HTTP 400 响应，核对独立 judge
+与旧式 `judge.model` 不同顺序下的真实 CLI 请求去向，不调用模型服务，也不验证模型评分成功。
+
 另有配置读回 smoke test，在真实 OpenSandbox 安装并预检 OpenCode，重置冲突的
 OpenAI provider，再读回 MCP 和其他 provider 的保留状态。只需上述 sandbox 变量，
 不需要模型 key 或原生模型服务的可达性：

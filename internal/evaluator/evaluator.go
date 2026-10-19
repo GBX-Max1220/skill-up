@@ -825,6 +825,9 @@ func (e *defaultEvaluator) newJudgeForCase(
 		if _, err := agent.Preflight(ctx, rt, judgeAgent); err != nil {
 			return nil, fmt.Errorf("judge agent %s preflight failed: %w", judgeAgent.Name(), err)
 		}
+	}
+	// OpenCode routing lives in the shared runtime, including for legacy judges.
+	if _, openCode := judgeAgent.(*agent.OpenCodeAgent); judgeCfg.Type == judgeTypeAgentJudge && (judgeCfg.Engine != nil || openCode) {
 		if err := initializeJudgeAgentConfig(ctx, rt, judgeAgent); err != nil {
 			return nil, fmt.Errorf("failed to initialize judge agent %s runtime configuration: %w", judgeAgent.Name(), err)
 		}
