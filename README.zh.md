@@ -14,7 +14,7 @@
       <img src="https://github.com/alibaba/skill-up/actions/workflows/ci.yml/badge.svg" alt="CI" />
     </a>
     <a href="https://deepwiki.com/alibaba/skill-up">
-      <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" />
+      <img src="assets/deepwiki-badge.svg" alt="Ask DeepWiki" />
     </a>
     <a href="./.github/badges/coverage.json">
       <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/alibaba/skill-up/badges/.github/badges/coverage.json" alt="Coverage" />

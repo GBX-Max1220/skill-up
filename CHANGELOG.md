@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Serve the DeepWiki badge from the repository in both READMEs to avoid broken
+  images when the external badge endpoint is unavailable.
 - Deliver built-in CLI agent prompts through files on Windows targets to avoid
   MSYS2 bash truncating quoted command arguments near 8 KiB, including long
   `agent_judge` prompts. Linux sandbox targets retain the configured inline
