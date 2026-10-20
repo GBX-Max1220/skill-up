@@ -7,9 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-20
+
+### Added
+- Support explicit `judge.engine` configuration independent of the evaluated agent,
+  reusing engine/model connection resolution and provisioning the judge CLI in
+  Docker and OpenSandbox runtimes. Detect known judge protocol mismatches before
+  agent execution.
+- Support sequential `judges` over one Agent execution in the same runtime,
+  including Docker and OpenSandbox. Each Agent judge starts a fresh session;
+  verdicts and artifacts remain separate while filesystem changes are shared.
+
+### Changed
+- Multi-judge evaluation uses a shared runtime for `none`, Docker and OpenSandbox,
+  replacing the earlier `none`-only snapshot/fork implementation. Judge writes,
+  installed dependencies, services and volumes can affect later judges and the
+  original Agent workspace. Per-judge filesystem isolation remains future work
+  tracked in [#308](https://github.com/alibaba/skill-up/issues/308).
+- Corrected expect-gate and rule-based scoring can lower benchmark scores for
+  unchanged evaluation inputs compared with earlier releases. Account for this
+  scoring change when comparing results across versions.
+
 ### Fixed
-- Serve the DeepWiki badge from the repository in both READMEs to avoid broken
-  images when the external badge endpoint is unavailable.
+- Preserve localized regression literals and unrelated existing cases in
+  `skill-upper`; add read-only planning and external-evidence review paths,
+  explicit field-comment guidance, and behavioral regression cases.
+- Make `skill-upper` credential checks report configuration presence without
+  printing secret values, and account for engine-specific authentication and
+  saved credentials before treating a missing environment variable as a blocker.
 - Reapply each OpenCode judge's resolved provider connection, including legacy
   `judge.model` members, so sequential judges do not inherit a sibling endpoint.
 - Deliver built-in CLI agent prompts through files on Windows targets to avoid
@@ -20,16 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host directory is now resolved to an absolute path before materialization, so a
   relative output directory no longer fails with a misleading "escapes context
   dir" error. Path traversal remains rejected.
-
-### Added
-- Support explicit `judge.engine` configuration independent of the evaluated agent,
-  reusing engine/model connection resolution and provisioning the judge CLI in
-  isolated runtimes. Detect known judge protocol mismatches before agent execution.
-- Support sequential `judges` over one Agent execution in the same runtime,
-  including Docker and OpenSandbox. Each Agent judge starts a fresh session;
-  verdicts and artifacts remain separate while filesystem changes are shared.
-
-### Fixed
 - Initialize independent OpenCode judges with their own provider endpoint and API-key binding,
   clearing runner-derived provider settings when the judge selects the default endpoint.
 - Preserve skipped judge outcomes and grouped evaluation artifacts when a case
@@ -42,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thresholds retain their existing semantics.
 - Display skipped assertions separately from evaluated failures in HTML,
   Markdown, and benchmark Markdown reports, including HTML summary counts.
+- Serve the DeepWiki badge from the repository in both READMEs to avoid broken
+  images when the external badge endpoint is unavailable.
 
 ## [0.13.0] - 2026-10-09
 
@@ -121,12 +138,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture uploads.
 
 ### Fixed
-- Preserve localized regression literals and unrelated existing cases in
-  `skill-upper`; add read-only planning and external-evidence review paths,
-  explicit field-comment guidance, and behavioral regression cases.
-- Make `skill-upper` credential checks report configuration presence without
-  printing secret values, and account for engine-specific authentication and
-  saved credentials before treating a missing environment variable as a blocker.
 - Compare structured tool arguments by JSON value in `tool_called` and
   `tool_called_in_turn`, preventing different arrays, objects, or scalar types
   with identical display text from being scored as matching arguments.
@@ -763,6 +774,8 @@ The `v0.5.0` release tag is available at
   project and delivers the end-to-end capability to declare eval environments,
   run cases and emit structured reports as described in [README.md](README.md).
 
+[Unreleased]: https://github.com/alibaba/skill-up/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/alibaba/skill-up/releases/tag/v0.14.0
 [0.13.0]: https://github.com/alibaba/skill-up/releases/tag/v0.13.0
 [0.12.0]: https://github.com/alibaba/skill-up/releases/tag/v0.12.0
 [0.11.0]: https://github.com/alibaba/skill-up/releases/tag/v0.11.0
