@@ -20,7 +20,7 @@
       <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/alibaba/skill-up/badges/.github/badges/coverage.json" alt="Coverage" />
     </a>
     <a href="https://go.dev/">
-      <img src="https://img.shields.io/badge/go-%3E%3D1.25-blue" alt="Go Version" />
+      <img src="https://img.shields.io/badge/go-%3E%3D1.26-blue" alt="Go Version" />
     </a>
     <a href="LICENSE">
       <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License" />

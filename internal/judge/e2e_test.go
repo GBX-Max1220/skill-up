@@ -157,7 +157,7 @@ func TestE2E_ExpectFail_ShortCircuit_JudgeNeverCalled(t *testing.T) {
 	// Expect requires exit code 2, but the actual exit code is 1, and the
 	// output does not contain "success".
 	expectCfg := &config.Expect{
-		ExitCode:    intPtr(2),
+		ExitCode:    new(2),
 		MustContain: []string{"success"},
 	}
 

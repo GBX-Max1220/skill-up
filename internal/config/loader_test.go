@@ -1010,25 +1010,25 @@ func TestLoader_SkillName(t *testing.T) {
 	}{
 		{
 			name:      "frontmatter name differs from dir basename",
-			skillMD:   strPtr("---\nname: code-stats\ndescription: stuff\n---\n\n# Body\n"),
+			skillMD:   new("---\nname: code-stats\ndescription: stuff\n---\n\n# Body\n"),
 			wantName:  "code-stats",
 			wantFound: true,
 		},
 		{
 			name:      "frontmatter without name field",
-			skillMD:   strPtr("---\ndescription: stuff\n---\n\n# Body\n"),
+			skillMD:   new("---\ndescription: stuff\n---\n\n# Body\n"),
 			wantName:  "",
 			wantFound: false,
 		},
 		{
 			name:      "empty name value",
-			skillMD:   strPtr("---\nname: \"\"\n---\n"),
+			skillMD:   new("---\nname: \"\"\n---\n"),
 			wantName:  "",
 			wantFound: false,
 		},
 		{
 			name:      "no frontmatter fence",
-			skillMD:   strPtr("# Just a heading\n"),
+			skillMD:   new("# Just a heading\n"),
 			wantName:  "",
 			wantFound: false,
 		},
@@ -1063,5 +1063,3 @@ func TestLoader_SkillName(t *testing.T) {
 		})
 	}
 }
-
-func strPtr(s string) *string { return &s }

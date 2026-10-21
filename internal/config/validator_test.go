@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-func intPtr(v int) *int { return &v }
-
 //nolint:maintidx,funlen // table-driven test cases drive the line count; splitting hurts readability.
 func TestValidator_ValidateEvalConfig(t *testing.T) {
 	t.Parallel()
@@ -150,7 +148,7 @@ func TestValidator_ValidateEvalConfig(t *testing.T) {
 					Success: []Rule{
 						{OutputContains: &OutputContainsRule{All: []string{"ok"}}},
 						{OutputMatches: &OutputMatchesRule{All: []string{"ok"}}},
-						{ExitCode: intPtr(0)},
+						{ExitCode: new(0)},
 						{ToolCalled: &ToolCalledRule{Name: "read"}},
 						{FilesExist: []string{"out.txt"}},
 						{FilesNotExist: []string{"secret.txt"}},
@@ -585,7 +583,7 @@ func TestValidator_ValidateEvalConfig(t *testing.T) {
 					Type:          "agent_judge",
 					Model:         "test-model",
 					Criteria:      []string{"criterion"},
-					PassThreshold: float64Ptr(0.0),
+					PassThreshold: new(0.0),
 				},
 			},
 			wantErr: false,
@@ -609,7 +607,7 @@ func TestValidator_ValidateEvalConfig(t *testing.T) {
 					Type:          "agent_judge",
 					Model:         "test-model",
 					Criteria:      []string{"criterion"},
-					PassThreshold: float64Ptr(1.1),
+					PassThreshold: new(1.1),
 				},
 			},
 			wantErr: true,
@@ -1112,7 +1110,7 @@ func TestValidator_ValidateCaseConfig(t *testing.T) {
 					Type:          "agent_judge",
 					Model:         "test-model",
 					Criteria:      []string{"criterion"},
-					PassThreshold: float64Ptr(-0.1),
+					PassThreshold: new(-0.1),
 				},
 			},
 			wantErr: true,
@@ -1128,7 +1126,7 @@ func TestValidator_ValidateCaseConfig(t *testing.T) {
 				Judge: JudgeConfig{
 					Type:           "script",
 					ScriptPath:     "check.sh",
-					TimeoutSeconds: intPtr(-1),
+					TimeoutSeconds: new(-1),
 				},
 			},
 			wantErr: true,
@@ -1684,10 +1682,6 @@ func containsHelper(s, substr string) bool {
 	}
 
 	return false
-}
-
-func float64Ptr(v float64) *float64 {
-	return &v
 }
 
 func TestValidator_CollectArtifacts(t *testing.T) {
