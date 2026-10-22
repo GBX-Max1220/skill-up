@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Require Go 1.26 or later for source builds and update the Go CI toolchain.
+- Update the OpenAI Go SDK to 3.77.0, OpenTelemetry to 1.47.0, and
+  DeepSeek Harness packages to 0.1.5-rc.3 while retaining the required cordis 4.0.2.
+
 ### Fixed
 - Clarify nested YAML comments and keep `skill-upper` scaffolding focused on
   the requested cases and scoring contract. Accept read-only checksum queries

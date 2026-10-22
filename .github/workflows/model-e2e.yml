@@ -59,7 +59,7 @@ jobs:
         if: steps.secrets.outputs.available == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.x"
           cache: true
 
       - name: Set up Node.js
@@ -176,7 +176,7 @@ jobs:
         if: steps.secrets.outputs.available == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.x"
           cache: true
 
       - name: Install uv
@@ -312,7 +312,7 @@ jobs:
         if: steps.secrets.outputs.available == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.x"
           cache: true
 
       - name: Set up Node.js
@@ -393,7 +393,7 @@ jobs:
         if: steps.secrets.outputs.available == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.x"
           cache: true
 
       - name: Pre-pull Docker image

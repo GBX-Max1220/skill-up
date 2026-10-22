@@ -50,7 +50,7 @@ func TestNewJudge_ScriptWithTimeout(t *testing.T) {
 	cfg := config.JudgeConfig{
 		Type:           scriptType,
 		ScriptPath:     "/tmp/test.sh",
-		TimeoutSeconds: intPtr(45),
+		TimeoutSeconds: new(45),
 	}
 	j, err := NewJudge(cfg, nil, nil)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestNewJudge_AgentJudge_PropagatesTimeoutSeconds(t *testing.T) {
 		Type:           "agent_judge",
 		Model:          "test-model",
 		Criteria:       []string{"c1"},
-		TimeoutSeconds: intPtr(45),
+		TimeoutSeconds: new(45),
 	}
 	j, err := NewJudge(cfg, &mockJudgeTestAgent{}, &mockJudgeTestRuntime{})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestMergeJudgeConfig_CaseOverridesGlobal(t *testing.T) {
 		PassThreshold:  &globalThreshold,
 		Criteria:       []string{"global-c"},
 		Skills:         []config.SkillRef{{Source: "local_path", Path: "evals/fixtures/global-judge"}},
-		TimeoutSeconds: intPtr(60),
+		TimeoutSeconds: new(60),
 	}
 	caseLevel := config.JudgeConfig{
 		Type:     ruleBasedType,
@@ -286,12 +286,12 @@ func TestMergeJudgeConfig_CaseTimeoutOverridesGlobal(t *testing.T) {
 	global := config.JudgeConfig{
 		Type:           scriptType,
 		ScriptPath:     "/tmp/global.sh",
-		TimeoutSeconds: intPtr(60),
+		TimeoutSeconds: new(60),
 	}
 	caseLevel := config.JudgeConfig{
 		Type:           scriptType,
 		ScriptPath:     "/tmp/case.sh",
-		TimeoutSeconds: intPtr(120),
+		TimeoutSeconds: new(120),
 	}
 	merged := MergeJudgeConfig(global, caseLevel)
 	if merged.TimeoutSeconds == nil || *merged.TimeoutSeconds != 120 {

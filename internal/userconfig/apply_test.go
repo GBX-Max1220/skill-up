@@ -21,7 +21,7 @@ func TestApplyEnv_SetsTelemetry(t *testing.T) {
 			"b.key": "2",
 			"a.key": "1",
 		},
-		Verbose: ptrBool(true),
+		Verbose: new(true),
 	}}
 	applied, err := ApplyEnv(c)
 	if err != nil {
@@ -137,14 +137,12 @@ func TestApplyEnv_PassesThroughSkillUpEnvFromUserEnvMap(t *testing.T) {
 	}
 }
 
-func ptrBool(b bool) *bool { return &b }
-
 func TestApplyEnv_VerboseFalseExplicitDoesNotSetLogEnvs(t *testing.T) {
 	for _, k := range []string{envOtelLogUserPrompts, envOtelLogToolContent, envOtelLogToolDetails} {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)
 	}
-	c := Config{Telemetry: Telemetry{Verbose: ptrBool(false)}}
+	c := Config{Telemetry: Telemetry{Verbose: new(false)}}
 	if _, err := ApplyEnv(c); err != nil {
 		t.Fatal(err)
 	}

@@ -86,7 +86,7 @@ func TestCheckExpect_MustNotContain_Fail(t *testing.T) {
 
 func TestCheckExpect_ExitCode_Pass(t *testing.T) {
 	// Expect exit_code=1, actual=1 → pass.
-	expect := &config.Expect{ExitCode: intPtr(1)}
+	expect := &config.Expect{ExitCode: new(1)}
 	r := CheckExpect(expect, Input{ExitCode: 1})
 	if !r.Passed {
 		t.Fatalf("expected pass, got failures: %+v", r.Failures)
@@ -95,7 +95,7 @@ func TestCheckExpect_ExitCode_Pass(t *testing.T) {
 
 func TestCheckExpect_ExitCode_Fail(t *testing.T) {
 	// Expect exit_code=1, actual=2 → fail.
-	expect := &config.Expect{ExitCode: intPtr(1)}
+	expect := &config.Expect{ExitCode: new(1)}
 	r := CheckExpect(expect, Input{ExitCode: 2})
 	if r.Passed {
 		t.Fatal("expected fail")
@@ -115,8 +115,8 @@ func TestCheckExpect_ExitCode_Nil_NoCheck(t *testing.T) {
 }
 
 func TestCheckExpect_ExitCode_Zero_Configured(t *testing.T) {
-	// ExitCode == intPtr(0) means "configured as 0" — actual must be 0.
-	expect := &config.Expect{ExitCode: intPtr(0)}
+	// ExitCode == new(0) means "configured as 0" — actual must be 0.
+	expect := &config.Expect{ExitCode: new(0)}
 
 	// actual=0 → pass
 	r := CheckExpect(expect, Input{ExitCode: 0})
@@ -369,7 +369,7 @@ func TestCheckExpect_CombinedRules_MultipleFailures(t *testing.T) {
 	expect := &config.Expect{
 		MustContain:    []string{"missing_kw"},
 		MustNotContain: []string{"LGTM"},
-		ExitCode:       intPtr(2), // expect 2, actual is 1 → triggers exit_code failure
+		ExitCode:       new(2), // expect 2, actual is 1 → triggers exit_code failure
 		FilesExist:     []string{"missing.txt"},
 	}
 	in := Input{
