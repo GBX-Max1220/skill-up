@@ -275,7 +275,7 @@ func TestMetadataSurvivesNilResult(t *testing.T) {
 	graded := EvalResult{Status: judge.StatusError, Grading: nil, Error: context.Canceled}
 	outcome := JudgeOutcome{
 		ID: member.ID, Type: member.Type, Status: graded.Status, Result: graded.Grading,
-		Metrics:   gradedMetrics(member, graded, stop),
+		Metrics:   gradedMetrics(member, graded, false),
 		Execution: memberExecution(graded, stop, false),
 	}
 	if outcome.Result != nil {

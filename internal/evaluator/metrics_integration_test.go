@@ -45,8 +45,30 @@ exit 0
 		"Set-Content -LiteralPath $env:EVAL_METRICS_RESULT_PATH -Value $body\nWrite-Output scored\nexit 0\n"
 )
 
+// sleepPosix and sleepWindows outlive the judge timeout so a later cancellation
+// or deadline lands while the member is still running.
+const (
+	sleepPosix   = "#!/bin/sh\nsleep 5\nexit 0\n"
+	sleepWindows = "Start-Sleep -Seconds 5\nexit 0\n"
+)
+
 func scoreRegistry() []config.MetricConfig {
 	return []config.MetricConfig{{ID: "correctness", Required: true}, {ID: "completeness"}}
+}
+
+// newScratchRuntime builds a none runtime on a path the test removes best-effort,
+// so a lingering Windows grandchild cannot block harness cleanup.
+func newScratchRuntime(t *testing.T, dir string) runtime.Runtime {
+	t.Helper()
+	rt, err := runtime.NewRuntime(runtime.Config{Type: "none", WorkspaceDir: dir})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	if err := rt.Create(context.Background()); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	return rt
 }
 
 func newScriptRuntime(t *testing.T) runtime.Runtime {
@@ -152,11 +174,19 @@ func TestExecuteCaseMultiJudgeDerivesGroupStateFromMembers(t *testing.T) {
 // accepted result must keep its verdict and its scores.
 func TestExecuteCaseCancellationKeepsAcceptedResult(t *testing.T) {
 	if goruntime.GOOS == windowsGOOS {
-		t.Skip("POSIX process-group kill semantics; the sleeping child holds the temp dir on Windows")
+		// The accepted-then-cancelled ordering depends on the first member finishing
+		// before the timer fires, which is not deterministic under Windows process
+		// startup costs; the deterministic interruption case is covered by
+		// TestExecuteCaseCancellationInterruptsRunningMember.
+		t.Skip("timing-sensitive accepted-retention ordering; POSIX only")
 	}
-	fast := metricsScript(t, t.TempDir(), pick(posixScore, powershellScore))
-	slowDir := t.TempDir()
-	slow := metricsScript(t, slowDir, "#!/bin/sh\nsleep 5\nexit 0\n")
+	scratch, err := os.MkdirTemp("", "skill-up-cancel-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+	fast := metricsScript(t, scratch, pick(posixScore, powershellScore))
+	slow := metricsScript(t, scratch, pick(sleepPosix, sleepWindows))
 	five := 30
 	members := []config.JudgeConfig{
 		{ID: "fast", Type: "script", ScriptPath: fast, TimeoutSeconds: &five, Metrics: scoreRegistry()},
@@ -167,7 +197,7 @@ func TestExecuteCaseCancellationKeepsAcceptedResult(t *testing.T) {
 		Agent: ag, OutputDir: t.TempDir(),
 		EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judges: &members},
 	})
-	rt := newScriptRuntime(t)
+	rt := newScratchRuntime(t, scratch)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
@@ -281,4 +311,54 @@ func pick(posix, windows string) string {
 		return windows
 	}
 	return posix
+}
+
+// TestExecuteCaseCancellationInterruptsRunningMember is deterministic: the case
+// context is already cancelled, so the member in flight never reaches a final
+// outcome. Its planned slots must read NOT_PRODUCED (never reached) rather than
+// MISSING (omitted by a completed judge), while the legacy SKIP/ERROR verdict
+// mapping and the member assertion denominator stay unchanged.
+func TestExecuteCaseCancellationInterruptsRunningMember(t *testing.T) {
+	scratch, err := os.MkdirTemp("", "skill-up-interrupt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+	script := metricsScript(t, scratch, pick(posixScore, powershellScore))
+	limit := 30
+	members := []config.JudgeConfig{
+		{ID: "only", Type: "script", ScriptPath: script, TimeoutSeconds: &limit, Metrics: scoreRegistry()},
+	}
+	ag := &mockAgent{name: "test", output: "done"}
+	e := newTestEvaluator(EvalOptions{
+		Agent: ag, OutputDir: t.TempDir(),
+		EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judges: &members},
+	})
+	rt := newScratchRuntime(t, scratch)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := e.executeCase(ctx, &config.CaseConfig{ID: "interrupt", Input: config.Input{Prompt: "hello"}}, "with_skill", rt, nil)
+
+	if len(result.JudgeResults) != 1 {
+		t.Fatalf("outcomes = %d", len(result.JudgeResults))
+	}
+	outcome := result.JudgeResults[0]
+	if outcome.Execution == nil || outcome.Execution.Completion != judge.CompletionInterrupted ||
+		outcome.Execution.Cause != judge.CauseCancellation {
+		t.Fatalf("execution = %+v", outcome.Execution)
+	}
+	if outcome.Metrics == nil {
+		t.Fatal("expected an envelope for the planned slots")
+	}
+	for _, metric := range outcome.Metrics.Metrics {
+		if metric.Availability != judge.NotProduced || metric.Value != nil {
+			t.Fatalf("slot = %+v, want NOT_PRODUCED with no value", metric)
+		}
+	}
+	if outcome.Metrics.Quality != judge.QualityNotAssessed {
+		t.Fatalf("quality = %s, want NOT_ASSESSED", outcome.Metrics.Quality)
+	}
+	if result.GroupCompletion != judge.CompletionInterrupted || result.GroupCause != judge.CauseCancellation {
+		t.Fatalf("group = %s/%s", result.GroupCompletion, result.GroupCause)
+	}
 }

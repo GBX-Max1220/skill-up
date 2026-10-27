@@ -307,6 +307,9 @@ const (
 	ProblemSchemaVersion    PayloadProblem = "schema_version"
 	ProblemUnboundResult    PayloadProblem = "unbound_or_stale_result"
 	ProblemSizeLimit        PayloadProblem = "size_limit"
+	// ProblemChannelUnsupported is not a payload defect: it says the collection channel
+	// itself was unavailable for this run, so no file could ever have been produced.
+	ProblemChannelUnsupported PayloadProblem = "metrics_channel_unsupported"
 )
 
 // MaterializeSlots builds exactly one result per planned slot. Unknown ids are

@@ -334,3 +334,63 @@ Rules that the implementation enforces:
 - Compatibility is untouched: `PASS/FAIL/SKIP/ERROR`, the #309 assertion and member
   denominators with zero-credit skipped members, the existing script-timeout verdict
   mapping, and the JSONL event schema all behave as before.
+
+### Script judge structured metrics result (slice 1 input channel)
+
+A script judge with a `metrics:` registry is given one private, invocation-bound
+result path per attempt. The runner injects:
+
+| Variable | Meaning |
+|---|---|
+| `EVAL_METRICS_RESULT_PATH` | the only path the collector reads; written by the script, atomically if possible |
+| `EVAL_METRICS_INVOCATION_ID` | random per invocation; must be echoed back inside the payload |
+| `EVAL_METRICS_TEMPLATE` | a minimal valid payload the script can copy |
+
+Accepted grammar (`schema_version` must be `1`):
+
+```json
+{
+  "schema_version": 1,
+  "invocation_id": "<EVAL_METRICS_INVOCATION_ID>",
+  "metrics": [
+    {"metric_id": "correctness", "availability": "AVAILABLE", "value": 0.0, "evidence": ["..."]},
+    {"metric_id": "completeness", "availability": "SKIP", "reason": "insufficient evidence"}
+  ]
+}
+```
+
+`availability` is one of `AVAILABLE`, `MISSING`, `SKIP`, `ERROR`. `AVAILABLE`
+requires a finite number in `[0,1]` — an explicit `0` is a real score. Unknown
+entry fields, unknown top-level fields, duplicate JSON keys at any level, a wrong
+schema version, a mismatched invocation id, a non-object top level, trailing
+content and an oversized file are all rejected.
+
+Rejection semantics:
+
+- Whole-envelope defect ⇒ every planned slot `ERROR` with that reason; nothing is usable.
+- One bad entry ⇒ only that slot `ERROR`; independently valid siblings stay `AVAILABLE`.
+- The path is `Lstat`-ed and must be a regular, non-symlink file, and its size is
+  checked before it is read. A directory, symlink or device is never collected.
+- A file that never appeared because evaluation was interrupted ⇒ `NOT_PRODUCED`.
+- A file that never appeared after the script exited `0` ⇒ rejected payload, not a
+  fabricated zero.
+- A nonzero exit never collects scores even if a valid file exists; the file stays
+  an on-disk diagnostic.
+
+Persistence: the envelope rides on `judge.Result.Metrics` and on each grouped
+`judge.Outcome` (`metrics` plus `execution`), so it lands in `report.json`
+(single judge) and in `evaluation.json` (`judge_results[]`, plus
+`aggregation.completion_state` / `aggregation.termination_cause`). `grading.json`
+keeps the Anthropic shape untouched.
+
+Not implemented in this slice:
+
+- `agent_judge` numeric metric output (its strict result contract is separate).
+- Collection for sandboxed runtimes: only the local `none` environment assigns a
+  path, so a script judge with metrics elsewhere reports `metrics_channel_unsupported`
+  rather than pretending a stale file was found.
+- Report/HTML/Markdown rendering of metrics, benchmark statistics, per-metric
+  comparisons, and any addition to the JSONL evaluation-event stream (which needs
+  its own schema and consumer review).
+- Cancel-source attribution beyond an observed process interrupt: anything not
+  provably signalled is reported as `unknown`, never inferred from error text.

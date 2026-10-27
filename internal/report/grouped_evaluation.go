@@ -16,8 +16,8 @@ type GroupedEvaluation struct {
 // member completions and never replaces Status, and Cause records why the plan ended
 // separately from how far it got.
 type GroupAggregation struct {
-	Strategy   string            `json:"strategy"`
-	Status     judge.Status      `json:"status"`
-	Completion judge.Completion  `json:"completion_state,omitempty"`
-	Cause      judge.Cause       `json:"termination_cause,omitempty"`
+	Strategy   string           `json:"strategy"`
+	Status     judge.Status     `json:"status"`
+	Completion judge.Completion `json:"completion_state,omitempty"`
+	Cause      judge.Cause      `json:"termination_cause,omitempty"`
 }

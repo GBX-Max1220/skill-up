@@ -471,3 +471,80 @@ func TestScriptJudgeTimeoutWithoutCollectedFileLeavesSlotsNotProduced(t *testing
 		t.Fatalf("quality = %s, want NOT_ASSESSED", res.Metrics.Quality)
 	}
 }
+
+func TestScriptJudgeRejectsOversizedAndNonRegularResults(t *testing.T) {
+	t.Run("oversized payload is rejected before it is read", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeMetricsScript(t, dir, metricsScriptCase{
+			posix: "#!/bin/sh\nexit 0\n", windows: "exit 0\n",
+		})
+		resultPath := filepath.Join(dir, "metrics-result.json")
+		// A padding string plus valid JSON shape: over the collector limit.
+		padding := strings.Repeat("x", MaxMetricsPayloadBytes+16)
+		payload := `{"schema_version":1,"invocation_id":"inv-42","metrics":[{"metric_id":"correctness","availability":"AVAILABLE","value":0.5,"evidence":["` + padding + `"]}]}`
+		if err := os.WriteFile(resultPath, []byte(payload), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		j := &ScriptJudge{
+			ScriptPath: script, MetricSlots: SlotsFromConfig(twoMetricRegistry()),
+			MetricsResultPath: resultPath, MetricsInvocationID: "inv-42",
+		}
+		res, err := j.Evaluate(context.Background(), Input{WorkspacePath: dir})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		for _, metric := range res.Metrics.Metrics {
+			if metric.Availability != Errored || metric.Reason != string(ProblemSizeLimit) {
+				t.Fatalf("slot = %+v, want ERROR/%s", metric, ProblemSizeLimit)
+			}
+		}
+	})
+
+	t.Run("a non-regular path is never collected", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeMetricsScript(t, dir, metricsScriptCase{
+			posix: "#!/bin/sh\nexit 0\n", windows: "exit 0\n",
+		})
+		resultPath := filepath.Join(dir, "metrics-result.json")
+		if err := os.Mkdir(resultPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		j := &ScriptJudge{
+			ScriptPath: script, MetricSlots: SlotsFromConfig(twoMetricRegistry()),
+			MetricsResultPath: resultPath, MetricsInvocationID: "inv-42",
+		}
+		res, err := j.Evaluate(context.Background(), Input{WorkspacePath: dir})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		for _, metric := range res.Metrics.Metrics {
+			if metric.Availability != Errored || metric.Reason != string(ProblemUnboundResult) {
+				t.Fatalf("slot = %+v, want ERROR/%s", metric, ProblemUnboundResult)
+			}
+		}
+	})
+
+	t.Run("an unavailable channel is reported as such, not as a stale file", func(t *testing.T) {
+		dir := t.TempDir()
+		script := writeMetricsScript(t, dir, metricsScriptCase{
+			posix: "#!/bin/sh\necho ok\nexit 0\n", windows: "Write-Output ok\nexit 0\n",
+		})
+		j := &ScriptJudge{
+			ScriptPath: script, MetricSlots: SlotsFromConfig(twoMetricRegistry()),
+			// MetricsResultPath deliberately empty: a non-local runtime never gets one.
+			MetricsInvocationID: "inv-42",
+		}
+		res, err := j.Evaluate(context.Background(), Input{WorkspacePath: dir})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		if res.Status != StatusPass {
+			t.Fatalf("legacy verdict changed: %s", res.Status)
+		}
+		for _, metric := range res.Metrics.Metrics {
+			if metric.Availability != Errored || metric.Reason != string(ProblemChannelUnsupported) {
+				t.Fatalf("slot = %+v, want ERROR/%s", metric, ProblemChannelUnsupported)
+			}
+		}
+	})
+}

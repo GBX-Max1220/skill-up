@@ -67,13 +67,22 @@ func (e *defaultEvaluator) runMultipleJudges(
 		if graded.Status == judge.StatusError && graded.Error != nil {
 			causes = append(causes, graded.Error)
 		}
-		// An outcome that reached a final validated state before the stop is
-		// accepted and retained: a later cancellation or deadline never rewrites
-		// its verdict, and its scores are not downgraded because evaluation then
-		// stopped. Only members without such an outcome take the interrupt verdict.
-		accepted := graded.Grading != nil && graded.Status != judge.StatusError
 		stop := memberStop(ctx, memberCtx, memberTimeout)
-		outcome.Metrics = gradedMetrics(member, graded, stop)
+		// A member is accepted only when it reached its own final outcome: no stop
+		// at all, or a deadline that still left usable collected scores. A
+		// cancellation that arrived while the member was running never counts as
+		// acceptance, so its slots stay NOT_PRODUCED instead of looking like an
+		// omitted metric, and its verdict is not laundered into a completed run.
+		accepted := false
+		if graded.Grading != nil && graded.Status != judge.StatusError {
+			switch stop.Cause {
+			case judge.CauseNone:
+				accepted = true
+			case judge.CauseDeadlineExpiry:
+				accepted = envelopeHasScores(graded.Grading.Metrics)
+			}
+		}
+		outcome.Metrics = gradedMetrics(member, graded, accepted)
 		outcome.Execution = memberExecution(graded, stop, accepted)
 		if memberErr := recordMemberContextError(memberCtx, &outcome, accepted); memberErr != nil {
 			causes = append(causes, memberErr)
@@ -158,10 +167,10 @@ func preventedMetrics(judgeID string, registry []config.MetricConfig) *judge.Met
 	return judge.MaterializeSlots(judgeID, slots, nil, judge.ProblemNone, true)
 }
 
-// gradedMetrics builds the envelope from what a judge produced. A stop that
-// happened after a usable score never discards that score; slots that were never
-// reached stay NOT_PRODUCED rather than becoming zero.
-func gradedMetrics(member config.JudgeConfig, graded EvalResult, stop judge.Stop) *judge.MetricsEnvelope {
+// gradedMetrics builds the envelope from what a judge produced. A score that was
+// already collected survives a later stop; slots that were never reached stay
+// NOT_PRODUCED rather than becoming zero or looking omitted.
+func gradedMetrics(member config.JudgeConfig, graded EvalResult, accepted bool) *judge.MetricsEnvelope {
 	slots := judge.SlotsFromConfig(member.Metrics)
 	if len(slots) == 0 {
 		return nil
@@ -169,7 +178,10 @@ func gradedMetrics(member config.JudgeConfig, graded EvalResult, stop judge.Stop
 	if graded.Grading != nil && graded.Grading.Metrics != nil {
 		return graded.Grading.Metrics
 	}
-	prevented := stop.Cause != judge.CauseNone && graded.Grading == nil
+	// Anything the execution layer stopped before a final outcome leaves its slots
+	// NOT_PRODUCED: the metric was never reached, which is not the same as a judge
+	// omitting or declining a metric in a completed result.
+	prevented := !accepted
 	return judge.MaterializeSlots(member.ID, slots, nil, judge.ProblemNone, prevented)
 }
 
@@ -304,6 +316,20 @@ func causeForReason(reason string) judge.Cause {
 // than a plan terminator, so it does not become the group cause. Members without
 // execution metadata (legacy judges with no metric registry) contribute nothing,
 // and an empty result leaves both values unset so the artifact omits them.
+// envelopeHasScores reports whether a collected envelope carries at least one
+// usable score, which is what lets a deadline-terminated member stay accepted.
+func envelopeHasScores(env *judge.MetricsEnvelope) bool {
+	if env == nil {
+		return false
+	}
+	for _, metric := range env.Metrics {
+		if metric.Availability == judge.Available {
+			return true
+		}
+	}
+	return false
+}
+
 func foldGroupState(outcomes []JudgeOutcome) (judge.Completion, judge.Cause) {
 	completions := make([]judge.Completion, 0, len(outcomes))
 	cause := judge.CauseNone

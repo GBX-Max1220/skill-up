@@ -202,32 +202,48 @@ func (j *ScriptJudge) buildResult(passed bool, evidence, debugInfo string, in In
 // attachMetrics collects this invocation's structured metric result file and
 // materializes one slot per planned registry entry onto the judge result.
 //
-// The rules it enforces: the file must be a regular file at exactly the assigned
-// path, bound to this invocation id, within the size limit, and schema-valid. A
+// The rules it enforces: the path must resolve to a regular, non-symlink file of
+// an acceptable size, bound to this invocation id, and schema-valid. A
 // whole-envelope defect poisons every slot; a single bad entry poisons only its
-// own slot and independently valid siblings stay AVAILABLE. Absence of a file
-// after a completed run leaves slots MISSING rather than zero.
+// own slot and independently valid siblings stay AVAILABLE. A file that never
+// appeared while evaluation was interrupted yields NOT_PRODUCED, and one that
+// never appeared after a completed run yields a rejected payload rather than a
+// fabricated zero.
 func (j *ScriptJudge) attachMetrics(res *Result, in Input, prevented bool) {
 	if res == nil || len(j.MetricSlots) == 0 {
 		return
 	}
 	if j.MetricsResultPath == "" {
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemUnboundResult, prevented)
+		// The channel is not available for this judge (a non-local runtime, or a
+		// judge built without one). Report that honestly rather than implying a
+		// stale file was found.
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemChannelUnsupported, prevented)
 		return
 	}
-	info, err := os.Stat(j.MetricsResultPath)
+	info, err := os.Lstat(j.MetricsResultPath)
 	if errors.Is(err, os.ErrNotExist) && prevented {
 		// Nothing was ever produced because evaluation was interrupted: the slots
 		// are NOT_PRODUCED, not a rejected payload.
 		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemNone, true)
 		return
 	}
-	if err != nil || info.IsDir() {
+	if err != nil {
 		problem := ProblemUnboundResult
-		if err != nil && !os.IsNotExist(err) {
+		if !os.IsNotExist(err) {
 			problem = ProblemUnparseable
 		}
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, problem, false)
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, problem, prevented)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		// A symlink, directory or device node is never a collected result.
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemUnboundResult, prevented)
+		return
+	}
+	if info.Size() > MaxMetricsPayloadBytes {
+		// Bound the read before it happens: an oversized file must not be loaded
+		// into memory just to be rejected afterwards.
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemSizeLimit, prevented)
 		return
 	}
 	raw, err := os.ReadFile(j.MetricsResultPath)
