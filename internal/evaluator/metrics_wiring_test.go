@@ -64,14 +64,18 @@ func TestMemberStopAttributesSources(t *testing.T) {
 			want:          judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: judge.CancelUnspecified, Detail: "context deadline exceeded"},
 		},
 		{
-			name:          "cancellation without an observed signal stays unknown",
-			build:         func(*testing.T) (context.Context, context.Context) { return canceledContext(false), canceledContext(false) },
-			want:          judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelUnspecified, Detail: "context canceled"},
+			name: "cancellation without an observed signal stays unknown",
+			build: func(*testing.T) (context.Context, context.Context) {
+				return canceledContext(false), canceledContext(false)
+			},
+			want: judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelUnspecified, Detail: "context canceled"},
 		},
 		{
-			name:          "cancellation with an observed signal is attributed",
-			build:         func(*testing.T) (context.Context, context.Context) { return canceledContext(true), canceledContext(true) },
-			want:          judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelOSSignal, Detail: "context canceled"},
+			name: "cancellation with an observed signal is attributed",
+			build: func(*testing.T) (context.Context, context.Context) {
+				return canceledContext(true), canceledContext(true)
+			},
+			want: judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelOSSignal, Detail: "context canceled"},
 		},
 	}
 	for _, tc := range cases {
@@ -374,10 +378,10 @@ func TestSignalObserverReportsOnlyObservedSignals(t *testing.T) {
 
 func TestGroupFoldOverMemberOutcomes(t *testing.T) {
 	cases := []struct {
-		name     string
-		states   []judge.Completion
-		want     judge.Completion
-		wantErr  bool
+		name    string
+		states  []judge.Completion
+		want    judge.Completion
+		wantErr bool
 	}{
 		{"completed plus pending cancelled", []judge.Completion{judge.CompletionFinished, judge.CompletionInterrupted}, judge.CompletionInterrupted, false},
 		{"failed plus pending cancelled keeps FAILED", []judge.Completion{judge.CompletionFailed, judge.CompletionInterrupted}, judge.CompletionFailed, false},

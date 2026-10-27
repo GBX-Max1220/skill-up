@@ -16,19 +16,19 @@ func TestValidateJudgeMetrics(t *testing.T) {
 	}{
 		{name: "absent registry is valid legacy configuration", metrics: nil, wantOK: true},
 		{
-			name:     "two well-formed slots",
-			metrics:  []MetricConfig{{ID: "correctness", Required: true}, {ID: "completeness", MinScore: f(0.7)}},
-			wantOK:   true,
+			name:    "two well-formed slots",
+			metrics: []MetricConfig{{ID: "correctness", Required: true}, {ID: "completeness", MinScore: f(0.7)}},
+			wantOK:  true,
 		},
 		{
-			name:     "a zero threshold is distinguishable from an absent one and stays valid",
-			metrics:  []MetricConfig{{ID: "correctness", MinScore: f(0)}},
-			wantOK:   true,
+			name:    "a zero threshold is distinguishable from an absent one and stays valid",
+			metrics: []MetricConfig{{ID: "correctness", MinScore: f(0)}},
+			wantOK:  true,
 		},
 		{
-			name:     "upper bound is inclusive",
-			metrics:  []MetricConfig{{ID: "correctness", MinScore: f(1)}},
-			wantOK:   true,
+			name:    "upper bound is inclusive",
+			metrics: []MetricConfig{{ID: "correctness", MinScore: f(1)}},
+			wantOK:  true,
 		},
 		{
 			name:     "threshold above the score range is rejected",
