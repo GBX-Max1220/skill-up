@@ -11,7 +11,13 @@ type GroupedEvaluation struct {
 }
 
 // GroupAggregation records the case-level decision without flattening criteria.
+//
+// Completion and Cause are derived group metadata (#317): completion folds over the
+// member completions and never replaces Status, and Cause records why the plan ended
+// separately from how far it got.
 type GroupAggregation struct {
-	Strategy string       `json:"strategy"`
-	Status   judge.Status `json:"status"`
+	Strategy   string            `json:"strategy"`
+	Status     judge.Status      `json:"status"`
+	Completion judge.Completion  `json:"completion_state,omitempty"`
+	Cause      judge.Cause       `json:"termination_cause,omitempty"`
 }

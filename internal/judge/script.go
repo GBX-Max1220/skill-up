@@ -2,8 +2,10 @@ package judge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,18 @@ type ScriptJudge struct {
 	// Runtime executes the script in the same environment as the evaluated agent.
 	// When nil, ScriptJudge creates a none runtime so local execution uses the same path.
 	Runtime evalruntime.Runtime
+
+	// MetricSlots is the planned named-metric registry for this judge. Empty means
+	// the judge produces no metrics envelope at all.
+	MetricSlots []MetricSlot
+
+	// MetricsResultPath is the runner-assigned host path for this invocation's
+	// structured result. Set only when the script runs against the local runtime.
+	MetricsResultPath string
+
+	// MetricsInvocationID binds the collected file to this exact invocation, so a
+	// leftover file from an earlier attempt is never accepted.
+	MetricsInvocationID string
 }
 
 // Evaluate implements the Judge interface by executing the configured script.
@@ -114,24 +128,38 @@ func (j *ScriptJudge) evaluateInRuntime(ctx context.Context, rt evalruntime.Runt
 	if remoteTranscript != "" {
 		transcriptEnv = plan.envPath(remoteTranscript)
 	}
+	env := map[string]string{
+		"EVAL_TRANSCRIPT_PATH": transcriptEnv,
+		"EVAL_FINAL_MESSAGE":   in.FinalMessage,
+		"EVAL_EXIT_CODE":       strconv.Itoa(in.ExitCode),
+	}
+	if len(j.MetricSlots) > 0 && j.MetricsResultPath != "" {
+		env["EVAL_METRICS_RESULT_PATH"] = j.MetricsResultPath
+		env["EVAL_METRICS_INVOCATION_ID"] = j.MetricsInvocationID
+		env["EVAL_METRICS_TEMPLATE"] = MetricsPayloadTemplate(j.MetricsInvocationID)
+	}
 	result, err := rt.Exec(ctx, command, evalruntime.ExecOptions{
 		Cwd:        cwd,
 		TimeoutSec: int(timeout.Seconds()),
-		Env: map[string]string{
-			"EVAL_TRANSCRIPT_PATH": transcriptEnv,
-			"EVAL_FINAL_MESSAGE":   in.FinalMessage,
-			"EVAL_EXIT_CODE":       strconv.Itoa(in.ExitCode),
-		},
+		Env:        env,
 	})
 	evidence := strings.TrimSpace(result.Stdout)
 	debugInfo := strings.TrimSpace(result.Stderr)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			// A timeout does not invalidate a trustworthy result: if this
+			// invocation's own schema-valid file was written before the deadline,
+			// the scores are collected while the existing verdict mapping and the
+			// timeout record are preserved.
 			if j.TimeoutIsError {
 				timeoutErr := fmt.Errorf("script timed out after %s: %w", timeout, ctx.Err())
-				return NewErrorResult(timeoutErr, in.TurnsExecuted, in.TurnsTotal), timeoutErr
+				res := NewErrorResult(timeoutErr, in.TurnsExecuted, in.TurnsTotal)
+				j.attachMetrics(res, in, true)
+				return res, timeoutErr
 			}
-			return j.buildResult(false, "script timed out after "+timeout.String(), debugInfo, in), nil
+			res := j.buildResult(false, "script timed out after "+timeout.String(), debugInfo, in)
+			j.attachMetrics(res, in, true)
+			return res, nil
 		}
 		if result.ExitCode == 0 {
 			return nil, fmt.Errorf("script execution failed: %w", err)
@@ -142,13 +170,18 @@ func (j *ScriptJudge) evaluateInRuntime(ctx context.Context, rt evalruntime.Runt
 		if detail == "" {
 			detail = fmt.Sprintf("script exited with code %d", result.ExitCode)
 		}
-		return j.buildResult(false, detail, debugInfo, in), nil
+		res := j.buildResult(false, detail, debugInfo, in)
+		// A nonzero exit never collects scores as a valid result (row P5): the file
+		// stays a diagnostic artifact only.
+		return res, nil
 	}
 
 	if evidence == "" {
 		evidence = "script passed (exit code 0)"
 	}
-	return j.buildResult(true, evidence, debugInfo, in), nil
+	res := j.buildResult(true, evidence, debugInfo, in)
+	j.attachMetrics(res, in, false)
+	return res, nil
 }
 
 // buildResult creates a judge Result from script execution outcome.
@@ -164,4 +197,44 @@ func (j *ScriptJudge) buildResult(passed bool, evidence, debugInfo string, in In
 	}
 
 	return NewResult([]AssertionResult{assertion}, in.TurnsExecuted, in.TurnsTotal)
+}
+
+// attachMetrics collects this invocation's structured metric result file and
+// materializes one slot per planned registry entry onto the judge result.
+//
+// The rules it enforces: the file must be a regular file at exactly the assigned
+// path, bound to this invocation id, within the size limit, and schema-valid. A
+// whole-envelope defect poisons every slot; a single bad entry poisons only its
+// own slot and independently valid siblings stay AVAILABLE. Absence of a file
+// after a completed run leaves slots MISSING rather than zero.
+func (j *ScriptJudge) attachMetrics(res *Result, in Input, prevented bool) {
+	if res == nil || len(j.MetricSlots) == 0 {
+		return
+	}
+	if j.MetricsResultPath == "" {
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemUnboundResult, prevented)
+		return
+	}
+	info, err := os.Stat(j.MetricsResultPath)
+	if errors.Is(err, os.ErrNotExist) && prevented {
+		// Nothing was ever produced because evaluation was interrupted: the slots
+		// are NOT_PRODUCED, not a rejected payload.
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemNone, true)
+		return
+	}
+	if err != nil || info.IsDir() {
+		problem := ProblemUnboundResult
+		if err != nil && !os.IsNotExist(err) {
+			problem = ProblemUnparseable
+		}
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, problem, false)
+		return
+	}
+	raw, err := os.ReadFile(j.MetricsResultPath)
+	if err != nil {
+		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemUnparseable, prevented)
+		return
+	}
+	emitted, payloadProblem := ParseMetricsPayload(raw, j.MetricsInvocationID)
+	res.Metrics = MaterializeSlots("script", j.MetricSlots, emitted, payloadProblem, false)
 }

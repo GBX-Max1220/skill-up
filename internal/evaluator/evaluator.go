@@ -6,6 +6,8 @@ package evaluator
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,6 +111,11 @@ type EvalResult struct {
 
 	// AggregationStrategy identifies the multi-judge policy, including gate failures.
 	AggregationStrategy string
+
+	// GroupCompletion folds the member completion states and GroupCause records why
+	// the plan ended. Both are derived metadata, never another verdict. (#317)
+	GroupCompletion judge.Completion
+	GroupCause      judge.Cause
 
 	// JudgeSession is the separate agent session used by agent_judge. It is
 	// preserved even when the judge fails to produce a valid grading result.
@@ -753,6 +760,7 @@ func (e *defaultEvaluator) runJudgePhaseWithSpan(
 
 	cleanupScript := configureScriptJudge(ctx, j, judgeInput.Transcript, strictTimeout)
 	defer cleanupScript()
+	e.configureMetricsChannel(ctx, j, configName, caseCfg, artifactRoot)
 
 	grading, err := j.Evaluate(ctx, judgeInput)
 	if err != nil {
@@ -782,6 +790,52 @@ func (e *defaultEvaluator) runJudgePhaseWithSpan(
 	}
 
 	return *result
+}
+
+// configureMetricsChannel assigns one private, invocation-bound result path for a
+// script judge that declares named metrics. The path is created fresh per
+// invocation and carries a random id, so a leftover file from an earlier attempt
+// can never be accepted as this run's result. Local (none) environments only in
+// this slice: a sandboxed script cannot see a host path, and channel work for
+// those runtimes is a separate bounded change.
+func (e *defaultEvaluator) configureMetricsChannel(
+	ctx context.Context,
+	j judge.Judge,
+	configName string,
+	caseCfg *config.CaseConfig,
+	artifactRoot string,
+) {
+	sj, ok := j.(*judge.ScriptJudge)
+	if !ok || len(sj.MetricSlots) == 0 {
+		return
+	}
+	if e.evalCfg.Environment.Type != "none" {
+		logging.DebugContextf(ctx, "Evaluator: named metrics are not collected for case %s in the %s environment", caseCfg.ID, e.evalCfg.Environment.Type)
+		return
+	}
+	if configName == "" || caseCfg.ID == "" || e.outputDir == "" {
+		return
+	}
+	dir := filepath.Join(e.outputDir, caseCfg.ID, configName, "outputs", artifactRoot)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logging.WarnContextf(ctx, "Evaluator: cannot create metrics dir for case %s: %v", caseCfg.ID, err)
+		return
+	}
+	invocation, err := metricsInvocationID()
+	if err != nil {
+		logging.WarnContextf(ctx, "Evaluator: cannot generate metrics invocation id for case %s: %v", caseCfg.ID, err)
+		return
+	}
+	sj.MetricsResultPath = filepath.Join(dir, "metrics-"+invocation+".json")
+	sj.MetricsInvocationID = invocation
+}
+
+func metricsInvocationID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 func configureScriptJudge(ctx context.Context, j judge.Judge, transcriptData transcript.Transcript, strictTimeout bool) func() {

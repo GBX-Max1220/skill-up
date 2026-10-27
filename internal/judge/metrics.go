@@ -87,13 +87,12 @@ const (
 	QualityNotAssessed   Quality = "NOT_ASSESSED"
 )
 
-// Cancellation and deadline sources are recorded only when actually observed.
-// A bare context.Canceled does not establish user intent, so it stays unknown.
+// Only two cancel sources are actually detectable today: a process interrupt observed by
+// the CLI, and everything else, which is reported as unknown rather than guessed.
+// A bare context.Canceled does not establish user intent.
 const (
-	CancelOSSignal      = "os_signal"
-	CancelParentContext = "parent_context"
-	CancelChildScope    = "child_scope"
-	CancelUnspecified   = "unknown"
+	CancelOSSignal    = "os_signal"
+	CancelUnspecified = "unknown"
 )
 
 // ErrEmptyGroup guards group folding against inventing a state.
@@ -190,7 +189,6 @@ type TimeoutMetadata struct {
 	Occurred  bool   `json:"occurred"`
 	Source    string `json:"source,omitempty"`
 	Recovered bool   `json:"recovered,omitempty"`
-	Attempts  int    `json:"attempts,omitempty"`
 }
 
 // SlotsFromConfig turns the configured metric registry into planned slots. The

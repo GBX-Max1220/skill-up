@@ -34,6 +34,7 @@ func NewJudge(cfg config.JudgeConfig, ag agent.Agent, rt runtime.Runtime) (Judge
 			ScriptPath:     cfg.ScriptPath,
 			TimeoutSeconds: derefInt(cfg.TimeoutSeconds),
 			Runtime:        rt,
+			MetricSlots:    SlotsFromConfig(cfg.Metrics),
 		}, nil
 
 	case "agent_judge":

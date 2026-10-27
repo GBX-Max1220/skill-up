@@ -83,6 +83,7 @@ func (e *defaultEvaluator) runMultipleJudges(
 		result.JudgeResults = append(result.JudgeResults, outcome)
 	}
 	result.Grading, result.Status = judge.DefaultOutcomeAggregator().Aggregate(result.JudgeResults, result.Turns, turnsTotal)
+	result.GroupCompletion, result.GroupCause = foldGroupState(result.JudgeResults)
 	if result.Status == judge.StatusError {
 		result.Error = multiJudgeError(ctx, result.JudgeResults, causes)
 	}
@@ -295,4 +296,33 @@ func causeForReason(reason string) judge.Cause {
 	default:
 		return judge.CauseExecutionError
 	}
+}
+
+// foldGroupState derives plan-level state from the members: completion folds over
+// member completions by the fixed rank, and the cause is the first reason that
+// actually ended the plan. A per-member judge_declined is a scoring reason rather
+// than a plan terminator, so it does not become the group cause. Members without
+// execution metadata (legacy judges with no metric registry) contribute nothing,
+// and an empty result leaves both values unset so the artifact omits them.
+func foldGroupState(outcomes []JudgeOutcome) (judge.Completion, judge.Cause) {
+	completions := make([]judge.Completion, 0, len(outcomes))
+	cause := judge.CauseNone
+	for _, outcome := range outcomes {
+		if outcome.Execution == nil {
+			continue
+		}
+		completions = append(completions, outcome.Execution.Completion)
+		if cause == judge.CauseNone && outcome.Execution.Cause != judge.CauseNone &&
+			outcome.Execution.Cause != judge.CauseJudgeDeclined {
+			cause = outcome.Execution.Cause
+		}
+	}
+	if len(completions) == 0 {
+		return "", judge.CauseNone
+	}
+	completion, err := judge.FoldGroup(completions)
+	if err != nil {
+		return "", cause
+	}
+	return completion, cause
 }

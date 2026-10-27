@@ -596,7 +596,12 @@ func (r *Runner) writeCaseArtifacts(ws *report.IterationWorkspace, res *evaluato
 			Version:      1,
 			Gates:        res.ExpectResult,
 			JudgeResults: res.JudgeResults,
-			Aggregation:  report.GroupAggregation{Strategy: strategy, Status: res.Status},
+			Aggregation: report.GroupAggregation{
+				Strategy:   strategy,
+				Status:     res.Status,
+				Completion: res.GroupCompletion,
+				Cause:      res.GroupCause,
+			},
 		}
 		if err := ws.WriteEvaluation(res.CaseID, cfgName, grouped); err != nil {
 			return err
