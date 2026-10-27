@@ -23,6 +23,7 @@ cases:
     - evals/cases/scaffold-with-user-simulator.yaml
     - evals/cases/english-context-generates-english-only-cases.yaml
     - evals/cases/evolve-existing-skill.yaml
+    - evals/cases/review-evolution-evidence.yaml
     - evals/cases/plan-without-mutation.yaml
     - evals/cases/preserve-localized-regressions.yaml
     - evals/cases/external-trace-review.yaml

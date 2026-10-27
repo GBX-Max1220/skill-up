@@ -174,7 +174,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
-          cache: true
+          # Self-hosted runners retain Go caches; restoring/uploading the shared
+          # multi-GB archive can collide with existing modules and time out.
+          cache: false
 
       - name: Check formatting
         run: |
