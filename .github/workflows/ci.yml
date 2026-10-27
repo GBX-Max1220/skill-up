@@ -78,7 +78,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
-          cache: true
+          # Reuse persistent runner caches without remote archive transfers.
+          cache: false
 
       - name: Verify dependencies
         run: go mod verify
@@ -140,7 +141,8 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
-          cache: true
+          # Reuse persistent runner caches without remote archive transfers.
+          cache: false
 
       - name: Run deterministic e2e suite
         run: go test -tags e2e -timeout 1200s -count=1 -v ./e2e
