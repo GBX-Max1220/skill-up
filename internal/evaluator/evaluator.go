@@ -355,6 +355,9 @@ func (e *defaultEvaluator) executeCase(ctx context.Context, caseCfg *config.Case
 	var result EvalResult
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attemptCtx, cancel, timeoutSource, timeoutSec := withCaseTimeout(ctx, e.evalCfg.Cases.Defaults.TimeoutSeconds, caseCfg.Constraints.TimeoutSeconds)
+		// Name the armed knob so a deadline that fires through the case context can
+		// report its own source instead of being attributed to a guess.
+		attemptCtx = ContextWithDeadlineSource(attemptCtx, timeoutSource)
 		result = e.executeCaseOnce(attemptCtx, caseCfg, configName, overrideRT, overrideAgent)
 		// Decide whether to annotate *before* cancel() so (a) cancel doesn't
 		// overwrite Err with Canceled and erase the signal, and (b) a

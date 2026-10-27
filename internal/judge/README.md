@@ -276,3 +276,61 @@ go test ./internal/judge/ -run TestAgentJudge -v
 | `agent_judge_test.go` | 11 | Mock LLM client + threshold edge cases + JSON parsing |
 | `factory_test.go` | 8 | Factory construction + configuration merge |
 | `e2e_test.go` | 12 | End-to-end pipeline integration tests |
+| `metrics_test.go` | 8 tables | Group folding, quality derivation, availability states, payload-vs-slot validation, stop classification, definition compatibility |
+
+## Named metrics (#317, first slice: validated scoring and persistence)
+
+Configured per judge as a planned registry; omitted means the judge keeps today's
+shape exactly:
+
+```yaml
+judge:
+  type: agent_judge
+  metrics:
+    - id: correctness          # stable config identifier, never a judge-generated label
+      required: true
+      evidence_required: true
+    - id: completeness
+      min_score: 0.7           # absent means no threshold decision, which is not a threshold of 0
+```
+
+Four independent questions, four fields, disjoint value sets:
+
+| Field | Values | Question |
+|---|---|---|
+| `execution_stage` | `NOT_INVOKED` / `STARTED` / `COMPLETED` | did the member actually run |
+| `completion_state` | `COMPLETED` / `INCOMPLETE` / `FAILED` / `INTERRUPTED` | how far evaluation got |
+| `termination_cause` | `none` / `cancellation` / `deadline_expiry` / `expect_gate` / `process_exit` / `execution_error` / `contract_error` / `judge_declined` | why it stopped |
+| `availability` | `AVAILABLE` / `MISSING` / `ERROR` / `SKIP` / `NOT_PRODUCED` | did this slot produce a usable score |
+| `metric_quality_state` | `MET` / `NOT_MET` / `UNKNOWN` / `NOT_CONFIGURED` / `NOT_ASSESSED` | does a quality decision exist |
+
+Rules that the implementation enforces:
+
+- There is no `NOT_RUN` state. A judge that never started and one interrupted
+  mid-flight are both `INTERRUPTED`; `execution_stage` is what distinguishes them,
+  and no start timestamp is invented when none was recorded.
+- Group completion is derived, never assigned: `FAILED > INCOMPLETE > INTERRUPTED >
+  COMPLETED`, so `failed + pending-cancelled` stays `FAILED` while the cancellation
+  and the unfinished members remain visible on their own members.
+- `metric_quality_state` is always derived from slots by `DeriveQuality` and never
+  from `completion_state`. Thresholds configured and all thresholded values present
+  give `MET`/`NOT_MET`; thresholds with any thresholded value missing give
+  `UNKNOWN`; valid scores with no thresholds give `NOT_CONFIGURED`; no valid scores
+  give `NOT_ASSESSED`.
+- A timeout does not invalidate a trustworthy score. An accepted score stays
+  `AVAILABLE`, and the timeout, its source and any recovery stay recorded.
+  A score is never fabricated as zero, and an accepted result is never rewritten
+  by a cancellation that arrives later.
+- Whole-payload defects (unparseable, top-level shape, duplicate JSON keys, unknown
+  top-level field, schema version, unbound or stale result, size limit) make every
+  slot `ERROR`. Slot-level defects poison only their own slot and independently
+  valid siblings stay usable in storage, reports and comparisons alike.
+- Unknown ids are output diagnostics and never new planned slots; a duplicated id
+  invalidates its planned slot once. The coverage denominator is the registry count
+  and never moves.
+- Execution metadata and planned slots live on `Outcome` and the case result, not
+  only inside `judge.Result`, so a gate short-circuit or a cancellation with no
+  judge result still reports them.
+- Compatibility is untouched: `PASS/FAIL/SKIP/ERROR`, the #309 assertion and member
+  denominators with zero-credit skipped members, the existing script-timeout verdict
+  mapping, and the JSONL event schema all behave as before.
