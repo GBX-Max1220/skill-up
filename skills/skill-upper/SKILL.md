@@ -328,12 +328,36 @@ Only enter this loop when the user asks to fix, improve, iterate, or evolve the
 target Skill. If the user only asks to evaluate or report results, stop after
 Step 7 without modifying it.
 
-1. Diagnose failures from `result.json`, `grading.json`, and output evidence.
-2. Fix `SKILL.md` or supporting files when the Skill behavior is incorrect.
-3. Add or refine eval cases when coverage is missing.
-4. Do not weaken valid assertions merely to make a failure pass.
-5. Rerun failed cases first, then run the full eval suite.
-6. Continue until the evals pass or clearly report what remains blocked.
+1. Diagnose failures from `result.json`, `grading.json`, transcripts, and produced
+   artifacts. Distinguish a Skill defect from an invalid eval, execution or
+   infrastructure error, and an uncertain outcome. Before editing, state the
+   observed failure, the smallest proposed change, and the behavior it should
+   change; cite the evidence rather than assuming a score increase proves why.
+2. Preserve the original Skill and its run artifacts so the candidate can be
+   compared or reverted without overwriting either version's evidence. Fix
+   `SKILL.md` or supporting files within the requested scope. Keep unrelated
+   changes separate so their effects can be assessed.
+3. Preserve valid assertions. If an eval or judge is wrong, explain and correct
+   it separately, then evaluate both Skill versions against that same corrected
+   suite. Add regression coverage and nearby counterexamples where needed to
+   distinguish a reusable fix from a rule tailored to one prompt.
+4. Compare the original and candidate on the affected cases with the same engine,
+   model, environment, inputs, and judges. Reuse existing runs only when those
+   conditions match. `--baseline` compares with and without a Skill; it does not
+   compare old and new Skill versions. Use separate output directories for the
+   two versions. For uncertain or intermittent outcomes, repeat both versions
+   within the user's budget; `--iteration N` samples one version, not N revisions.
+5. Run the full eval suite for a promising candidate. Accept it only when the
+   evidence supports the intended improvement without regressions in important
+   existing behaviors. Inspect runtime, token usage, and execution errors where
+   available. A single PASS, a higher aggregate score, or a preferred-looking
+   answer alone does not establish a reliable improvement.
+6. Revert unsupported changes or report uncertainty; keeping the original is a
+   valid outcome. Stop when the requested improvement is verified, the agreed
+   budget is reached, or an external blocker prevents validation. Summarize the
+   accepted or reverted change, comparative evidence and artifact paths,
+   regressions, costs, and remaining limitations. Record reusable lessons only
+   when the execution evidence supports them, with their scope and uncertainty.
 
 ## Command quick reference
 

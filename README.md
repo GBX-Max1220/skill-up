@@ -143,14 +143,15 @@ my-skill-workspace/
 Continue in the same conversation:
 
 ```markdown
-Review the latest skill-up results. For each failure, determine whether the
-Skill or the eval is wrong. Fix SKILL.md and supporting files, or repair the
-eval case and judge as appropriate. Add regression cases for the bugs you
-found, rerun skill-up, and continue until the important behaviors pass.
+Use skill-upper to improve this Skill from the latest evaluation results.
+Follow its evolution workflow, compare the original and candidate, add
+regression coverage, and summarize which changes the evidence supports.
 ```
 
-This is the evolution loop: reports become fixes, fixes become regression
-cases, and every iteration makes the Skill and its eval suite stronger.
+The comparison and acceptance rules live in
+[skill-upper's evolution workflow](skills/skill-upper/SKILL.md#step-8-evolve-the-skill-when-requested).
+This prompt invokes that workflow; keeping the original is a valid outcome
+when a candidate does not show a supported improvement.
 
 ### Prefer manual setup?
 
