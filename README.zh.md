@@ -141,13 +141,15 @@ my-skill-workspace/
 在同一段对话中继续：
 
 ```markdown
-检查最新的 skill-up 评测结果。逐个判断失败来自 Skill 还是 eval：
-按需修复 SKILL.md 和相关文件，或修复 eval 用例与 Judge；为发现的问题
-补充回归用例，然后重新运行 skill-up，直到关键能力通过评测。
+使用 skill-upper 根据最新评测结果改进这个 Skill。
+遵循它的演进流程，对照原版与候选版，补充回归覆盖，并总结证据支持
+保留哪些改动。
 ```
 
-这就是演进闭环：报告转化为修复，修复沉淀为回归用例，每轮迭代都会让
-Skill 和它的评测集更可靠。
+对照与接受改动的规则统一定义在
+[skill-upper 的演进流程](skills/skill-upper/SKILL.md#step-8-evolve-the-skill-when-requested)中。
+这段提示词只负责调用该流程；候选版没有体现出有证据支持的改进时，
+保留原版也是有效结果。
 
 ### 更喜欢手工配置？
 
