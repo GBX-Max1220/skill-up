@@ -103,11 +103,7 @@ func deriveSingleExecution(ctx context.Context, result *EvalResult, env *judge.M
 	switch {
 	case ctx.Err() != nil:
 		stop := judge.ClassifyStop(ctx.Err(), judge.StopObservation{DeadlineSource: DeadlineSource(ctx), SignalObserved: SignalObserved(ctx)})
-		execution := interruptedExecution(stage, stop)
-		if stop.Cause == judge.CauseDeadlineExpiry {
-			execution.Timeout = &judge.TimeoutMetadata{Occurred: true, Source: stop.DeadlineSource}
-		}
-		return execution
+		return interruptedExecution(stage, stop)
 	case result.Grading != nil && result.Grading.Execution != nil:
 		return result.Grading.Execution
 	case contractError != "":

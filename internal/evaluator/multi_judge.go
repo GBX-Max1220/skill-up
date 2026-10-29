@@ -174,7 +174,7 @@ func stopDetail(stop judge.Stop) string {
 }
 
 func interruptedExecution(stage judge.Stage, stop judge.Stop) *judge.ExecutionMetadata {
-	return &judge.ExecutionMetadata{
+	meta := &judge.ExecutionMetadata{
 		Stage:          stage,
 		Completion:     judge.CompletionInterrupted,
 		Cause:          stop.Cause,
@@ -182,6 +182,10 @@ func interruptedExecution(stage judge.Stage, stop judge.Stop) *judge.ExecutionMe
 		CancelSource:   stop.CancelSource,
 		Detail:         stop.Detail,
 	}
+	if stop.Cause == judge.CauseDeadlineExpiry {
+		meta.Timeout = &judge.TimeoutMetadata{Occurred: true, Source: stop.DeadlineSource}
+	}
+	return meta
 }
 
 // preventedMetrics materializes every planned slot as NOT_PRODUCED for a member
