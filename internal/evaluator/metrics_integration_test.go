@@ -52,6 +52,15 @@ const (
 	longWaitWindows = "Start-Sleep -Seconds 5\nexit 0\n"
 )
 
+// scoreThenWaitBody emits valid scores and then outlives the judge deadline, so
+// a collected result must survive the stop.
+func scoreThenWaitBody() string {
+	if goruntime.GOOS == windowsGOOS {
+		return strings.Replace(powershellScore, "Write-Output scored\nexit 0", "Write-Output scored\nStart-Sleep -Seconds 6\nexit 0", 1)
+	}
+	return strings.Replace(posixScore, "echo \"scored\"\nexit 0", "echo \"scored\"\nsleep 6\nexit 0", 1)
+}
+
 func scoreRegistry() []config.MetricConfig {
 	return []config.MetricConfig{{ID: "correctness", Required: true}, {ID: "completeness"}}
 }
@@ -82,6 +91,27 @@ func newScriptRuntime(t *testing.T) runtime.Runtime {
 	}
 	t.Cleanup(func() { _ = rt.Close() })
 	return rt
+}
+
+// metricsScratchDir allocates a workspace outside the directory tree the test
+// harness removes itself. On Windows the runtime kills only the direct child, so
+// the timed-out script's own wait keeps this directory as its working directory
+// until it exits long after the test finished; POSIX process-group kill removes
+// it right away, where cleanup succeeds. Leaving it is a harness cost, not a
+// verdict: harness cleanup of that path would otherwise fail the test after
+// every assertion passed.
+func metricsScratchDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "skill-up-metrics-scratch-*") //nolint:usetesting // t.TempDir() cannot own a workspace a killed child still holds
+	if err != nil {
+		t.Fatalf("scratch dir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Logf("scratch workspace %s still held by the timed-out script, left for the OS temp cleaner: %v", dir, err)
+		}
+	})
+	return dir
 }
 
 func TestExecuteCaseSingleScriptJudgePersistsMetrics(t *testing.T) {
@@ -164,30 +194,35 @@ func TestExecuteCaseSingleScriptMetricContractControlsVerdict(t *testing.T) {
 		want     judge.Status
 		quality  judge.Quality
 		complete judge.Completion
+		coverage judge.Coverage
 	}{
 		{
 			name:     "threshold miss fails",
 			payload:  `{"schema_version":1,"invocation_id":"__INVOCATION__","metrics":[{"metric_id":"correctness","availability":"AVAILABLE","value":0.4}]}`,
 			registry: []config.MetricConfig{{ID: "correctness", Required: true, MinScore: new(0.7)}},
 			want:     judge.StatusFail, quality: judge.QualityNotMet, complete: judge.CompletionFinished,
+			coverage: judge.Coverage{Planned: 1, Available: 1},
 		},
 		{
 			name:     "required missing is error",
 			payload:  `{"schema_version":1,"invocation_id":"__INVOCATION__","metrics":[{"metric_id":"optional","availability":"AVAILABLE","value":0.8}]}`,
 			registry: []config.MetricConfig{{ID: "correctness", Required: true}, {ID: "optional"}},
 			want:     judge.StatusError, quality: judge.QualityNotConfigured, complete: judge.CompletionIncomplete,
+			coverage: judge.Coverage{Planned: 2, Available: 1, Missing: 1},
 		},
 		{
 			name:     "malformed payload is error",
 			payload:  `not-json`,
 			registry: []config.MetricConfig{{ID: "correctness", Required: true}},
 			want:     judge.StatusError, quality: judge.QualityNotAssessed, complete: judge.CompletionFailed,
+			coverage: judge.Coverage{Planned: 1, Errored: 1},
 		},
 		{
 			name:     "optional-only empty output remains completed",
 			payload:  `{"schema_version":1,"invocation_id":"__INVOCATION__","metrics":[]}`,
 			registry: []config.MetricConfig{{ID: "optional"}},
 			want:     judge.StatusPass, quality: judge.QualityNotAssessed, complete: judge.CompletionFinished,
+			coverage: judge.Coverage{Planned: 1, Missing: 1},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,6 +240,11 @@ func TestExecuteCaseSingleScriptMetricContractControlsVerdict(t *testing.T) {
 			}
 			if result.Metrics == nil || result.Metrics.Quality != tc.quality {
 				t.Fatalf("metrics=%+v, want quality %s", result.Metrics, tc.quality)
+			}
+			if got := result.Metrics.Coverage; got.Planned != tc.coverage.Planned || got.Available != tc.coverage.Available ||
+				got.Missing != tc.coverage.Missing || got.Errored != tc.coverage.Errored ||
+				got.Skipped != tc.coverage.Skipped || got.NotProduced != tc.coverage.NotProduced {
+				t.Fatalf("coverage = %+v, want %+v", got, tc.coverage)
 			}
 			if result.Execution == nil || result.Execution.Completion != tc.complete {
 				t.Fatalf("execution=%+v, want completion %s", result.Execution, tc.complete)
@@ -263,26 +303,72 @@ func TestExecuteCaseExpectGateFoldsGroupState(t *testing.T) {
 
 func TestExecuteCaseSingleScriptTimeoutRecordsSourceAndKeepsScores(t *testing.T) {
 	dir := t.TempDir()
-	body := pick(posixScore, powershellScore)
-	if goruntime.GOOS == windowsGOOS {
-		body = strings.Replace(body, "Write-Output scored\nexit 0", "Write-Output scored\nStart-Sleep -Seconds 5\nexit 0", 1)
-	} else {
-		body = strings.Replace(body, "echo \"scored\"\nexit 0", "echo \"scored\"\nsleep 5\nexit 0", 1)
-	}
-	script := metricsScript(t, dir, body)
+	script := metricsScript(t, dir, scoreThenWaitBody())
 	one := 1
 	member := config.JudgeConfig{ID: "scorer", Type: "script", ScriptPath: script, TimeoutSeconds: &one, Metrics: scoreRegistry()}
 	e := newTestEvaluator(EvalOptions{
 		Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(),
 		EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judge: member},
 	})
-	result := e.executeCase(context.Background(), &config.CaseConfig{ID: "single-timeout", Input: config.Input{Prompt: "hello"}}, "with_skill", newScriptRuntime(t), nil)
+	result := e.executeCase(context.Background(), &config.CaseConfig{ID: "single-timeout", Input: config.Input{Prompt: "hello"}}, "with_skill", newScratchRuntime(t, metricsScratchDir(t)), nil)
 	if result.Status != judge.StatusFail || result.Metrics == nil || result.Metrics.Coverage.Available != 2 {
 		t.Fatalf("timeout verdict/scores status=%s metrics=%+v", result.Status, result.Metrics)
 	}
 	if result.Execution == nil || result.Execution.Cause != judge.CauseDeadlineExpiry || result.Execution.DeadlineSource != judgeTimeoutSource ||
 		result.Execution.Timeout == nil || !result.Execution.Timeout.Occurred {
 		t.Fatalf("single timeout provenance = %+v", result.Execution)
+	}
+}
+
+// TestExecuteCaseGroupedJudgeTimeoutUnderLiveCaseDeadline drives the reviewer's
+// shape for real: the case knob is armed at 300s and never fires while the judge
+// knob is armed at 2s and does. The member runs as a child process, emits its
+// scores, and is then killed by its own deadline, so the stop must name the knob
+// that expired rather than the live case deadline above it.
+func TestExecuteCaseGroupedJudgeTimeoutUnderLiveCaseDeadline(t *testing.T) {
+	scratch := metricsScratchDir(t)
+	slowDir := filepath.Join(scratch, "slow")
+	if err := os.MkdirAll(slowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	slow := metricsScript(t, slowDir, scoreThenWaitBody())
+	two := 2
+	members := []config.JudgeConfig{
+		{ID: "scorer", Type: "script", ScriptPath: slow, TimeoutSeconds: &two, Metrics: scoreRegistry()},
+	}
+	e := newTestEvaluator(EvalOptions{
+		Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(),
+		EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judges: &members},
+	})
+	result := e.executeCase(context.Background(), &config.CaseConfig{
+		ID: "live-case-deadline", Input: config.Input{Prompt: "hello"},
+		Constraints: config.Constraints{TimeoutSeconds: 300},
+	}, "with_skill", newScratchRuntime(t, scratch), nil)
+
+	if len(result.JudgeResults) != 1 {
+		t.Fatalf("outcomes = %d", len(result.JudgeResults))
+	}
+	member := result.JudgeResults[0]
+	if member.Execution == nil || member.Execution.Cause != judge.CauseDeadlineExpiry ||
+		member.Execution.DeadlineSource != judgeTimeoutSource {
+		t.Fatalf("grouped timeout provenance = %+v", member.Execution)
+	}
+	if member.Execution.Timeout == nil || !member.Execution.Timeout.Occurred ||
+		member.Execution.Timeout.Source != judgeTimeoutSource {
+		t.Fatalf("timeout metadata = %+v", member.Execution.Timeout)
+	}
+	// Upstream (before #317) arms grouped script judges with TimeoutIsError=true
+	// and the single-judge path with false, so the same judge deadline is an ERROR
+	// verdict when grouped and FAIL when alone. What #317 must keep is that the
+	// expired knob stays attributable and the scores already collected survive.
+	if member.Status != judge.StatusError {
+		t.Fatalf("grouped member verdict = %s, want ERROR under the pre-existing strict script timeout", member.Status)
+	}
+	if member.Metrics == nil || member.Metrics.Coverage.Available != 2 {
+		t.Fatalf("collected scores lost on stop: metrics=%+v", member.Metrics)
+	}
+	if result.GroupCompletion != judge.CompletionInterrupted || result.GroupCause != judge.CauseDeadlineExpiry {
+		t.Fatalf("group = %s/%s, want INTERRUPTED/deadline_expiry", result.GroupCompletion, result.GroupCause)
 	}
 }
 
@@ -308,6 +394,9 @@ func TestExecuteCaseMultiJudgeDerivesGroupStateFromMembers(t *testing.T) {
 	for _, outcome := range result.JudgeResults {
 		if outcome.Metrics == nil || outcome.Metrics.Coverage.Available != 2 {
 			t.Fatalf("member %s envelope = %+v", outcome.ID, outcome.Metrics)
+		}
+		if outcome.Metrics.JudgeID != outcome.ID {
+			t.Fatalf("member %s persisted producer identity %q, want the configured id", outcome.ID, outcome.Metrics.JudgeID)
 		}
 		if outcome.Execution == nil || outcome.Execution.Completion != judge.CompletionFinished ||
 			outcome.Execution.Stage != judge.StageFinished {

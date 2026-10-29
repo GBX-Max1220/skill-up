@@ -292,6 +292,9 @@ func TestSkippedJudgesRetainSlotsPerCause(t *testing.T) {
 					t.Fatalf("metrics = %+v, want one NOT_PRODUCED slot", outcome.Metrics)
 				}
 			}
+			if result.GroupCompletion != judge.CompletionInterrupted || result.GroupCause != tc.want {
+				t.Fatalf("group state on the %s short circuit = %s/%s, want INTERRUPTED/%s", tc.reason, result.GroupCompletion, result.GroupCause, tc.want)
+			}
 		})
 	}
 }
