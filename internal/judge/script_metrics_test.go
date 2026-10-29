@@ -50,7 +50,7 @@ func (tc metricsScriptCase) body() string {
 func writeMetricsScript(t *testing.T, dir string, tc metricsScriptCase) string {
 	t.Helper()
 	path := filepath.Join(dir, tc.scriptName())
-	if err := os.WriteFile(path, []byte(tc.body()), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(tc.body()), 0o600); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 	return path
@@ -145,9 +145,12 @@ func twoMetricRegistry() []config.MetricConfig {
 	return []config.MetricConfig{{ID: "correctness", Required: true}, {ID: "completeness"}}
 }
 
-func TestScriptJudgeCollectsNamedMetrics(t *testing.T) {
-	minScore := 0.5
-	cases := []metricsScriptCase{
+func metricsScriptCases() []metricsScriptCase {
+	return append(metricsScriptBasicCases(), metricsScriptAdditionalCases()...)
+}
+
+func metricsScriptBasicCases() []metricsScriptCase {
+	return []metricsScriptCase{
 		{
 			name:     "two metrics including an explicit zero",
 			posix:    posixWriteTwoMetrics,
@@ -201,6 +204,12 @@ func TestScriptJudgeCollectsNamedMetrics(t *testing.T) {
 				"correctness": "unbound_or_stale_result", "completeness": "unbound_or_stale_result",
 			},
 		},
+	}
+}
+
+func metricsScriptAdditionalCases() []metricsScriptCase {
+	minScore := 0.5
+	return []metricsScriptCase{
 		{
 			// Contract §10: the runner collects the exact assigned file after a
 			// successful exit and rejects a missing one, so a zero-exit script that
@@ -263,57 +272,69 @@ func TestScriptJudgeCollectsNamedMetrics(t *testing.T) {
 			expectPlanned: 2,
 		},
 	}
+}
+
+func TestScriptJudgeCollectsNamedMetrics(t *testing.T) {
+	cases := metricsScriptCases()
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			res := runMetricsScriptCase(t, tc)
-			if tc.expectNilEnvelope {
-				if res.Metrics != nil {
-					t.Fatalf("expected no envelope after a nonzero exit, got %+v", res.Metrics)
+		t.Run(tc.name, func(t *testing.T) { checkMetricsScriptCase(t, tc) })
+	}
+}
+
+func checkMetricsScriptCase(t *testing.T, tc metricsScriptCase) {
+	t.Helper()
+	res := runMetricsScriptCase(t, tc)
+	if tc.expectNilEnvelope {
+		if res.Metrics != nil {
+			t.Fatalf("expected no envelope after a nonzero exit, got %+v", res.Metrics)
+		}
+		return
+	}
+	if res.Metrics == nil {
+		t.Fatal("expected a metrics envelope from the collected file")
+	}
+	env := res.Metrics
+	if env.Coverage.Planned != tc.expectPlanned {
+		t.Fatalf("planned = %d, want %d", env.Coverage.Planned, tc.expectPlanned)
+	}
+	if len(env.Metrics) != tc.expectPlanned {
+		t.Fatalf("materialized %d slots, want %d", len(env.Metrics), tc.expectPlanned)
+	}
+	if env.Quality != tc.expectQuality {
+		t.Fatalf("quality = %s, want %s", env.Quality, tc.expectQuality)
+	}
+	checkMetricValues(t, env, tc)
+	// The verdict mapping itself must not change because metrics exist.
+	if res.Status != StatusPass && !tc.nameIsFailing() {
+		t.Fatalf("status = %s, expected the legacy PASS for a zero-exit script", res.Status)
+	}
+}
+
+func checkMetricValues(t *testing.T, env *MetricsEnvelope, tc metricsScriptCase) {
+	t.Helper()
+	for _, metric := range env.Metrics {
+		want, ok := tc.expectAvailability[metric.MetricID]
+		if !ok {
+			t.Fatalf("unexpected slot %q", metric.MetricID)
+		}
+		if metric.Availability != want {
+			t.Fatalf("%s availability = %s, want %s (reason %q)", metric.MetricID, metric.Availability, want, metric.Reason)
+		}
+		if want != Available && metric.Value != nil {
+			t.Fatalf("%s carries value %v while unavailable: no fabricated zero allowed", metric.MetricID, *metric.Value)
+		}
+		if reason, ok := tc.expectReasons[metric.MetricID]; ok && !strings.Contains(metric.Reason, reason) {
+			t.Fatalf("%s reason = %q, want substring %q", metric.MetricID, metric.Reason, reason)
+		}
+	}
+	for id, wantValue := range tc.expectValues {
+		for _, metric := range env.Metrics {
+			if metric.MetricID == id {
+				if metric.Value == nil || *metric.Value != wantValue {
+					t.Fatalf("%s value = %v, want %v", id, metric.Value, wantValue)
 				}
-				return
 			}
-			if res.Metrics == nil {
-				t.Fatal("expected a metrics envelope from the collected file")
-			}
-			env := res.Metrics
-			if env.Coverage.Planned != tc.expectPlanned {
-				t.Fatalf("planned = %d, want %d", env.Coverage.Planned, tc.expectPlanned)
-			}
-			if len(env.Metrics) != tc.expectPlanned {
-				t.Fatalf("materialized %d slots, want %d", len(env.Metrics), tc.expectPlanned)
-			}
-			if env.Quality != tc.expectQuality {
-				t.Fatalf("quality = %s, want %s", env.Quality, tc.expectQuality)
-			}
-			for _, metric := range env.Metrics {
-				want, ok := tc.expectAvailability[metric.MetricID]
-				if !ok {
-					t.Fatalf("unexpected slot %q", metric.MetricID)
-				}
-				if metric.Availability != want {
-					t.Fatalf("%s availability = %s, want %s (reason %q)", metric.MetricID, metric.Availability, want, metric.Reason)
-				}
-				if want != Available && metric.Value != nil {
-					t.Fatalf("%s carries value %v while unavailable: no fabricated zero allowed", metric.MetricID, *metric.Value)
-				}
-				if reason, ok := tc.expectReasons[metric.MetricID]; ok && !strings.Contains(metric.Reason, reason) {
-					t.Fatalf("%s reason = %q, want substring %q", metric.MetricID, metric.Reason, reason)
-				}
-			}
-			for id, wantValue := range tc.expectValues {
-				for _, metric := range env.Metrics {
-					if metric.MetricID == id {
-						if metric.Value == nil || *metric.Value != wantValue {
-							t.Fatalf("%s value = %v, want %v", id, metric.Value, wantValue)
-						}
-					}
-				}
-			}
-			// The verdict mapping itself must not change because metrics exist.
-			if res.Status != StatusPass && !tc.nameIsFailing() {
-				t.Fatalf("status = %s, expected the legacy PASS for a zero-exit script", res.Status)
-			}
-		})
+		}
 	}
 }
 
@@ -472,33 +493,36 @@ func TestScriptJudgeTimeoutWithoutCollectedFileLeavesSlotsNotProduced(t *testing
 	}
 }
 
-func TestScriptJudgeRejectsOversizedAndNonRegularResults(t *testing.T) {
-	t.Run("oversized payload is rejected before it is read", func(t *testing.T) {
-		dir := t.TempDir()
-		script := writeMetricsScript(t, dir, metricsScriptCase{
-			posix: "#!/bin/sh\nexit 0\n", windows: "exit 0\n",
-		})
-		resultPath := filepath.Join(dir, "metrics-result.json")
-		// A padding string plus valid JSON shape: over the collector limit.
-		padding := strings.Repeat("x", MaxMetricsPayloadBytes+16)
-		payload := `{"schema_version":1,"invocation_id":"inv-42","metrics":[{"metric_id":"correctness","availability":"AVAILABLE","value":0.5,"evidence":["` + padding + `"]}]}`
-		if err := os.WriteFile(resultPath, []byte(payload), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		j := &ScriptJudge{
-			ScriptPath: script, MetricSlots: SlotsFromConfig(twoMetricRegistry()),
-			MetricsResultPath: resultPath, MetricsInvocationID: "inv-42",
-		}
-		res, err := j.Evaluate(context.Background(), Input{WorkspacePath: dir})
-		if err != nil {
-			t.Fatalf("Evaluate: %v", err)
-		}
-		for _, metric := range res.Metrics.Metrics {
-			if metric.Availability != Errored || metric.Reason != string(ProblemSizeLimit) {
-				t.Fatalf("slot = %+v, want ERROR/%s", metric, ProblemSizeLimit)
-			}
-		}
+func testOversizedMetricsPayload(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := writeMetricsScript(t, dir, metricsScriptCase{
+		posix: "#!/bin/sh\nexit 0\n", windows: "exit 0\n",
 	})
+	resultPath := filepath.Join(dir, "metrics-result.json")
+	// A padding string plus valid JSON shape: over the collector limit.
+	padding := strings.Repeat("x", MaxMetricsPayloadBytes+16)
+	payload := `{"schema_version":1,"invocation_id":"inv-42","metrics":[{"metric_id":"correctness","availability":"AVAILABLE","value":0.5,"evidence":["` + padding + `"]}]}`
+	if err := os.WriteFile(resultPath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j := &ScriptJudge{
+		ScriptPath: script, MetricSlots: SlotsFromConfig(twoMetricRegistry()),
+		MetricsResultPath: resultPath, MetricsInvocationID: "inv-42",
+	}
+	res, err := j.Evaluate(context.Background(), Input{WorkspacePath: dir})
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	for _, metric := range res.Metrics.Metrics {
+		if metric.Availability != Errored || metric.Reason != string(ProblemSizeLimit) {
+			t.Fatalf("slot = %+v, want ERROR/%s", metric, ProblemSizeLimit)
+		}
+	}
+}
+
+func TestScriptJudgeRejectsOversizedAndNonRegularResults(t *testing.T) {
+	t.Run("oversized payload is rejected before it is read", testOversizedMetricsPayload)
 
 	t.Run("a non-regular path is never collected", func(t *testing.T) {
 		dir := t.TempDir()

@@ -24,7 +24,7 @@ func collectedEnvelope(t *testing.T, judgeID string) *judge.MetricsEnvelope {
 	if problem != judge.ProblemNone {
 		t.Fatalf("payload rejected: %s", problem)
 	}
-	env := judge.MaterializeSlots(judgeID, slots, emitted, judge.ProblemNone, false)
+	env := judge.MaterializeSlots(judgeID, slots, emitted, judge.ProblemNone, judge.MetricProduced)
 	if env.Coverage.Available != 2 {
 		t.Fatalf("envelope = %+v", env)
 	}
@@ -48,7 +48,7 @@ func TestGroupedEvaluationPersistsMetricsAndExecution(t *testing.T) {
 			},
 			{
 				ID: "b", Type: "script", Status: judge.StatusSkip, SkipReason: "cancelled before invocation",
-				Metrics: judge.MaterializeSlots("b", plannedSlots(), nil, judge.ProblemNone, true),
+				Metrics: judge.MaterializeSlots("b", plannedSlots(), nil, judge.ProblemNone, judge.MetricPrevented),
 				Execution: &judge.ExecutionMetadata{
 					Stage: judge.StageNotInvoked, Completion: judge.CompletionInterrupted,
 					Cause: judge.CauseCancellation, CancelSource: judge.CancelOSSignal,
@@ -74,6 +74,11 @@ func TestGroupedEvaluationPersistsMetricsAndExecution(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
+	assertPersistedGroup(t, back)
+}
+
+func assertPersistedGroup(t *testing.T, back GroupedEvaluation) {
+	t.Helper()
 	if back.Aggregation.Completion != judge.CompletionInterrupted || back.Aggregation.Cause != judge.CauseCancellation {
 		t.Fatalf("group state lost: %+v", back.Aggregation)
 	}
@@ -94,6 +99,15 @@ func TestGroupedEvaluationPersistsMetricsAndExecution(t *testing.T) {
 	if zeroValue == nil || *zeroValue != 0 {
 		t.Fatalf("explicit zero not persisted: %v", zeroValue)
 	}
+	assertPersistedSecondMember(t, second)
+	// Legacy compatibility fields are untouched.
+	if first.Status != judge.StatusPass || second.Status != judge.StatusSkip || second.SkipReason == "" {
+		t.Fatalf("compat fields changed: %+v %+v", first, second)
+	}
+}
+
+func assertPersistedSecondMember(t *testing.T, second judge.Outcome) {
+	t.Helper()
 	if second.Execution == nil || second.Execution.Stage != judge.StageNotInvoked ||
 		second.Execution.Completion != judge.CompletionInterrupted ||
 		second.Execution.CancelSource != judge.CancelOSSignal {
@@ -106,9 +120,5 @@ func TestGroupedEvaluationPersistsMetricsAndExecution(t *testing.T) {
 		if metric.Availability != judge.NotProduced || metric.Value != nil {
 			t.Fatalf("persisted slot = %+v", metric)
 		}
-	}
-	// Legacy compatibility fields are untouched.
-	if first.Status != judge.StatusPass || second.Status != judge.StatusSkip || second.SkipReason == "" {
-		t.Fatalf("compat fields changed: %+v %+v", first, second)
 	}
 }

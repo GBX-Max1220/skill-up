@@ -317,6 +317,11 @@ Rules that the implementation enforces:
   give `MET`/`NOT_MET`; thresholds with any thresholded value missing give
   `UNKNOWN`; valid scores with no thresholds give `NOT_CONFIGURED`; no valid scores
   give `NOT_ASSESSED`.
+- For a judge that opts into a metric registry, a threshold miss changes its
+  verdict to `FAIL`; an errored slot or an unavailable required/thresholded slot
+  changes it to `ERROR`. Optional unavailable slots without thresholds do not
+  change the verdict and do not make completion `INCOMPLETE`. With no registry,
+  legacy verdict behavior is unchanged.
 - A timeout does not invalidate a trustworthy score. An accepted score stays
   `AVAILABLE`, and the timeout, its source and any recovery stay recorded.
   A score is never fabricated as zero, and an accepted result is never rewritten
@@ -329,11 +334,11 @@ Rules that the implementation enforces:
   invalidates its planned slot once. The coverage denominator is the registry count
   and never moves.
 - Execution metadata and planned slots live on `Outcome` and the case result, not
-  only inside `judge.Result`, so a gate short-circuit or a cancellation with no
-  judge result still reports them.
-- Compatibility is untouched: `PASS/FAIL/SKIP/ERROR`, the #309 assertion and member
-  denominators with zero-credit skipped members, the existing script-timeout verdict
-  mapping, and the JSONL event schema all behave as before.
+  only inside `judge.Result`, so single-judge early returns, gate short-circuits,
+  and cancellations with no judge result still report them.
+- Legacy verdicts, the #309 assertion and member denominators with zero-credit
+  skipped members, the existing script-timeout mapping, and the JSONL event schema
+  remain unchanged when metrics are not configured. The metric registry is opt-in.
 
 ### Script judge structured metrics result (slice 1 input channel)
 
@@ -377,11 +382,12 @@ Rejection semantics:
 - A nonzero exit never collects scores even if a valid file exists; the file stays
   an on-disk diagnostic.
 
-Persistence: the envelope rides on `judge.Result.Metrics` and on each grouped
-`judge.Outcome` (`metrics` plus `execution`), so it lands in `report.json`
-(single judge) and in `evaluation.json` (`judge_results[]`, plus
-`aggregation.completion_state` / `aggregation.termination_cause`). `grading.json`
-keeps the Anthropic shape untouched.
+Persistence: the envelope rides on `judge.Result.Metrics`, the single case result,
+and each grouped `judge.Outcome` (`metrics` plus `execution`). It lands in
+`report.json` and in `evaluation.json`; single-judge evaluation records use the
+top-level `metrics` and `execution` fields, while grouped records use
+`judge_results[]` plus `aggregation.completion_state` / `termination_cause`.
+`grading.json` keeps the Anthropic shape untouched.
 
 Not implemented in this slice:
 

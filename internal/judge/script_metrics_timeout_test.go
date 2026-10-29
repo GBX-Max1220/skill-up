@@ -41,11 +41,7 @@ func TestScriptJudgeRealSubprocessTimeoutCollectsResult(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			scratch, err := os.MkdirTemp("", "skill-up-metrics-timeout-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+			scratch := t.TempDir()
 			script := writeMetricsScript(t, scratch, metricsScriptCase{
 				posix:   realTimeoutPosix,
 				windows: realTimeoutWindows,

@@ -153,6 +153,10 @@ type Result struct {
 	// judges without a configured metrics registry leave this nil, and no legacy
 	// field changes meaning.
 	Metrics *MetricsEnvelope `json:"metrics,omitempty"`
+
+	// Execution is evaluator-facing metadata copied to the case record rather
+	// than nested in the legacy grading payload.
+	Execution *ExecutionMetadata `json:"-"`
 }
 
 // RecoveryMetadata describes a recovered judge result without exposing the

@@ -643,7 +643,7 @@ func validateJudgeList(members *[]JudgeConfig) []string {
 // validateJudgeMetrics checks the planned named-metric registry. Ids are stable
 // configuration identifiers, must be unique, and a configured threshold has to sit
 // inside the declared [0,1] score range.
-func validateJudgeMetrics(path string, metrics []MetricConfig) []string {
+func validateJudgeMetrics(configPath string, metrics []MetricConfig) []string {
 	if len(metrics) == 0 {
 		return nil
 	}
@@ -651,14 +651,14 @@ func validateJudgeMetrics(path string, metrics []MetricConfig) []string {
 	seen := make(map[string]bool, len(metrics))
 	for i, metric := range metrics {
 		if !judgeIDPattern.MatchString(metric.ID) {
-			errs = append(errs, fmt.Sprintf("%s.metrics[%d].id must be a safe lowercase identifier", path, i))
+			errs = append(errs, fmt.Sprintf("%s.metrics[%d].id must be a safe lowercase identifier", configPath, i))
 		}
 		if seen[metric.ID] {
-			errs = append(errs, fmt.Sprintf("%s.metrics[%d].id %q is duplicated", path, i, metric.ID))
+			errs = append(errs, fmt.Sprintf("%s.metrics[%d].id %q is duplicated", configPath, i, metric.ID))
 		}
 		seen[metric.ID] = true
 		if metric.MinScore != nil && (*metric.MinScore < 0.0 || *metric.MinScore > 1.0) {
-			errs = append(errs, fmt.Sprintf("%s.metrics[%d].min_score must be between 0.0 and 1.0", path, i))
+			errs = append(errs, fmt.Sprintf("%s.metrics[%d].min_score must be between 0.0 and 1.0", configPath, i))
 		}
 	}
 	return errs

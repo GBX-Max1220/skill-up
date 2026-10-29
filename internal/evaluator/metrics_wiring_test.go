@@ -12,23 +12,25 @@ import (
 	"github.com/alibaba/skill-up/internal/judge"
 )
 
-func timeout(n int) *int { return &n }
+type stopCase struct {
+	name          string
+	build         func(t *testing.T) (parent, member context.Context)
+	memberTimeout bool
+	want          judge.Stop
+}
 
-func TestMemberStopAttributesSources(t *testing.T) {
-	expiredCaseDeadlineIntoMember := func(source string) func(*testing.T) (context.Context, context.Context) {
-		return func(t *testing.T) (context.Context, context.Context) {
-			parent := expiredDeadlineContext(source)
-			member, cancel := context.WithCancel(parent)
-			t.Cleanup(cancel)
-			return parent, member
-		}
+func expiredCaseDeadlineIntoMember(source string) func(*testing.T) (context.Context, context.Context) {
+	return func(t *testing.T) (context.Context, context.Context) {
+		t.Helper()
+		parent := expiredDeadlineContext(source)
+		member, cancel := context.WithCancel(parent)
+		t.Cleanup(cancel)
+		return parent, member
 	}
-	cases := []struct {
-		name          string
-		build         func(t *testing.T) (parent, member context.Context)
-		memberTimeout bool
-		want          judge.Stop
-	}{
+}
+
+func stopCases() []stopCase {
+	return []stopCase{
 		{
 			name:          "no cancellation",
 			build:         func(*testing.T) (context.Context, context.Context) { return context.Background(), context.Background() },
@@ -38,13 +40,14 @@ func TestMemberStopAttributesSources(t *testing.T) {
 		{
 			name: "member-level deadline names its own knob",
 			build: func(t *testing.T) (context.Context, context.Context) {
+				t.Helper()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				t.Cleanup(cancel)
 				<-ctx.Done()
 				return context.Background(), ctx
 			},
 			memberTimeout: true,
-			want:          judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: "judge.timeout_seconds", Detail: "context deadline exceeded"},
+			want:          judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: judgeTimeoutSource, Detail: "context deadline exceeded"},
 		},
 		{
 			name:          "a case deadline firing through the member is not called a judge timeout",
@@ -53,8 +56,22 @@ func TestMemberStopAttributesSources(t *testing.T) {
 			want:          judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: "case.constraints.timeout_seconds", Detail: "context deadline exceeded"},
 		},
 		{
+			name: "inactive parent deadline metadata does not mask a judge timeout",
+			build: func(t *testing.T) (context.Context, context.Context) {
+				t.Helper()
+				parent := ContextWithDeadlineSource(context.Background(), "case.constraints.timeout_seconds")
+				member, cancel := context.WithTimeout(parent, 10*time.Millisecond)
+				t.Cleanup(cancel)
+				<-member.Done()
+				return parent, member
+			},
+			memberTimeout: true,
+			want:          judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: judgeTimeoutSource, Detail: "context deadline exceeded"},
+		},
+		{
 			name: "a parent deadline with an unattributed origin stays unknown",
 			build: func(t *testing.T) (context.Context, context.Context) {
+				t.Helper()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				t.Cleanup(cancel)
 				<-ctx.Done()
@@ -66,22 +83,30 @@ func TestMemberStopAttributesSources(t *testing.T) {
 		{
 			name: "cancellation without an observed signal stays unknown",
 			build: func(*testing.T) (context.Context, context.Context) {
-				return canceledContext(false), canceledContext(false)
+				return canceledContext(), canceledContext()
 			},
 			want: judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelUnspecified, Detail: "context canceled"},
 		},
 		{
 			name: "cancellation with an observed signal is attributed",
 			build: func(*testing.T) (context.Context, context.Context) {
-				return canceledContext(true), canceledContext(true)
+				return canceledWithSignalContext(), canceledWithSignalContext()
 			},
 			want: judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelOSSignal, Detail: "context canceled"},
 		},
 	}
+}
+
+func TestMemberStopAttributesSources(t *testing.T) {
+	cases := stopCases()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			parent, member := tc.build(t)
-			got := memberStop(parent, member, tc.memberTimeout)
+			memberDeadlineSource := ""
+			if tc.memberTimeout {
+				memberDeadlineSource = judgeTimeoutSource
+			}
+			got := memberStop(parent, member, memberDeadlineSource)
 			if got != tc.want {
 				t.Fatalf("memberStop = %+v, want %+v", got, tc.want)
 			}
@@ -98,11 +123,15 @@ func expiredDeadlineContext(source string) context.Context {
 
 // canceledContext returns a context whose Err is already context.Canceled. cancel()
 // sets Err synchronously, so there is nothing to wait for here.
-func canceledContext(signal bool) context.Context {
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+func canceledWithSignalContext() context.Context {
 	observer := &SignalObserver{}
-	if signal {
-		observer.MarkSignalObserved()
-	}
+	observer.MarkSignalObserved()
 	ctx, cancel := context.WithCancel(ContextWithSignalObserver(context.Background(), observer))
 	cancel()
 	return ctx
@@ -126,7 +155,11 @@ func TestRecordMemberContextErrorKeepsAcceptedResults(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			outcome := JudgeOutcome{Status: tc.start}
-			err := recordMemberContextError(ctx, &outcome, tc.accepted)
+			decision := MemberNotAccepted
+			if tc.accepted {
+				decision = MemberAccepted
+			}
+			err := recordMemberContextError(ctx, &outcome, decision)
 			if outcome.Status != tc.wantStatus {
 				t.Fatalf("status = %s, want %s", outcome.Status, tc.wantStatus)
 			}
@@ -150,20 +183,24 @@ func TestCompletionForContract(t *testing.T) {
 		return out
 	}
 	cases := []struct {
-		name string
-		env  *judge.MetricsEnvelope
-		want judge.Completion
+		name    string
+		env     *judge.MetricsEnvelope
+		planned []judge.MetricSlot
+		want    judge.Completion
 	}{
-		{"all available", env(judge.Available, judge.Available, judge.Available), judge.CompletionFinished},
-		{"optional omitted is incomplete", env(judge.Available, judge.Missing, judge.Available), judge.CompletionIncomplete},
-		{"required SKIP is incomplete", env(judge.Available, judge.Declined, judge.Available), judge.CompletionIncomplete},
-		{"cancelled slot is incomplete", env(judge.Available, judge.NotProduced, judge.Available), judge.CompletionIncomplete},
-		{"an errored metric fails the contract", env(judge.Available, judge.Errored, judge.Available), judge.CompletionFailed},
-		{"an errored metric outranks an omission", env(judge.Missing, judge.Errored, judge.Available), judge.CompletionFailed},
+		{"all available", env(judge.Available, judge.Available, judge.Available), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", Required: true}}, judge.CompletionFinished},
+		{"optional omitted is complete", env(judge.Available, judge.Missing, judge.Available), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", Required: true}}, judge.CompletionFinished},
+		{"required SKIP is incomplete", env(judge.Declined, judge.Available, judge.Available), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", Required: true}}, judge.CompletionIncomplete},
+		{"cancelled slot is incomplete", env(judge.NotProduced, judge.Available, judge.Available), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", Required: true}}, judge.CompletionIncomplete},
+		{"optional-only missing is complete", &judge.MetricsEnvelope{Metrics: []judge.MetricResult{{MetricID: "completeness", Availability: judge.Missing}}}, []judge.MetricSlot{{ID: "completeness"}}, judge.CompletionFinished},
+		{"optional-only empty output is complete", &judge.MetricsEnvelope{Metrics: []judge.MetricResult{{MetricID: "completeness", Availability: judge.Missing}, {MetricID: "another_optional", Availability: judge.Missing}}}, []judge.MetricSlot{{ID: "completeness"}, {ID: "another_optional"}}, judge.CompletionFinished},
+		{"thresholded unavailable is incomplete", env(judge.Available, judge.Available, judge.Missing), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", MinScore: new(0.7)}}, judge.CompletionIncomplete},
+		{"an errored metric fails the contract", env(judge.Available, judge.Errored, judge.Available), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", Required: true}}, judge.CompletionFailed},
+		{"an errored metric outranks an omission", env(judge.Missing, judge.Errored, judge.Available), []judge.MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following", Required: true}}, judge.CompletionFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := completionForContract(tc.env); got != tc.want {
+			if got := completionForContract(tc.env, tc.planned); got != tc.want {
 				t.Fatalf("completion = %s, want %s", got, tc.want)
 			}
 		})
@@ -190,7 +227,7 @@ func TestPreventedMetricsKeepsEveryPlannedSlot(t *testing.T) {
 }
 
 func TestPreventedMetricsWithThresholdsIsUnknown(t *testing.T) {
-	registry := []config.MetricConfig{{ID: "correctness", MinScore: ptr(0.7)}}
+	registry := []config.MetricConfig{{ID: "correctness", MinScore: new(0.7)}}
 	env := preventedMetrics("j1", registry)
 	if env.Quality != judge.QualityUnknown {
 		t.Fatalf("quality = %s, want UNKNOWN when a thresholded metric was never produced", env.Quality)
@@ -275,8 +312,8 @@ func TestMetadataSurvivesNilResult(t *testing.T) {
 	graded := EvalResult{Status: judge.StatusError, Grading: nil, Error: context.Canceled}
 	outcome := JudgeOutcome{
 		ID: member.ID, Type: member.Type, Status: graded.Status, Result: graded.Grading,
-		Metrics:   gradedMetrics(member, graded, false),
-		Execution: memberExecution(graded, stop, false),
+		Metrics:   gradedMetrics(member, graded, MemberNotAccepted),
+		Execution: memberExecution(graded, stop, MemberNotAccepted, judge.SlotsFromConfig(member.Metrics)),
 	}
 	if outcome.Result != nil {
 		t.Fatal("no Result may be fabricated to carry metadata")
@@ -309,14 +346,14 @@ func TestMetadataSurvivesNilResult(t *testing.T) {
 }
 
 func TestAcceptedResultKeepsScoresAfterLaterStop(t *testing.T) {
-	member := config.JudgeConfig{ID: "j1", Type: "agent_judge", Metrics: []config.MetricConfig{{ID: "correctness"}, {ID: "completeness"}}}
+	member := config.JudgeConfig{ID: "j1", Type: "agent_judge", Metrics: []config.MetricConfig{{ID: "correctness"}, {ID: "completeness", Required: true}}}
 	env := judge.MaterializeSlots("j1", judge.SlotsFromConfig(member.Metrics), []judge.EmittedMetric{
-		{MetricID: "correctness", Availability: "AVAILABLE", Value: ptr(0.8)},
-	}, judge.ProblemNone, false)
+		{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.8)},
+	}, judge.ProblemNone, judge.MetricProduced)
 	graded := EvalResult{Status: judge.StatusPass, Grading: &judge.Result{Status: judge.StatusPass, Metrics: env}}
 	stop := judge.Stop{Cause: judge.CauseCancellation, CancelSource: judge.CancelOSSignal}
 	outcome := JudgeOutcome{Status: graded.Status, Result: graded.Grading}
-	execution := memberExecution(graded, stop, true)
+	execution := memberExecution(graded, stop, MemberAccepted, judge.SlotsFromConfig(member.Metrics))
 	if execution.Completion != judge.CompletionIncomplete {
 		t.Fatalf("completion = %s, want INCOMPLETE because one required slot was never reached", execution.Completion)
 	}
@@ -326,7 +363,7 @@ func TestAcceptedResultKeepsScoresAfterLaterStop(t *testing.T) {
 	if outcome.Result.Metrics.Metrics[0].Availability != judge.Available {
 		t.Fatal("an accepted score was downgraded")
 	}
-	if got := recordMemberContextError(canceledPlain(), &outcome, true); got == nil {
+	if got := recordMemberContextError(canceledPlain(), &outcome, MemberAccepted); got == nil {
 		t.Fatal("expected the cancellation error to still be reported")
 	}
 	if outcome.Status != judge.StatusPass {
@@ -337,12 +374,12 @@ func TestAcceptedResultKeepsScoresAfterLaterStop(t *testing.T) {
 func TestTimeoutRemainsVisibleOnAcceptedResult(t *testing.T) {
 	member := config.JudgeConfig{ID: "j1", Type: "agent_judge", Metrics: []config.MetricConfig{{ID: "correctness"}}}
 	env := judge.MaterializeSlots("j1", judge.SlotsFromConfig(member.Metrics), []judge.EmittedMetric{
-		{MetricID: "correctness", Availability: "AVAILABLE", Value: ptr(0.9)},
-	}, judge.ProblemNone, false)
+		{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.9)},
+	}, judge.ProblemNone, judge.MetricProduced)
 	graded := EvalResult{Status: judge.StatusPass, Grading: &judge.Result{Status: judge.StatusPass, Metrics: env}}
-	stop := judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: "judge.timeout_seconds", Detail: "context deadline exceeded"}
-	execution := memberExecution(graded, stop, true)
-	if execution.Timeout == nil || !execution.Timeout.Occurred || execution.Timeout.Source != "judge.timeout_seconds" {
+	stop := judge.Stop{Cause: judge.CauseDeadlineExpiry, DeadlineSource: judgeTimeoutSource, Detail: "context deadline exceeded"}
+	execution := memberExecution(graded, stop, MemberAccepted, judge.SlotsFromConfig(member.Metrics))
+	if execution.Timeout == nil || !execution.Timeout.Occurred || execution.Timeout.Source != judgeTimeoutSource {
 		t.Fatalf("timeout metadata missing: %+v", execution)
 	}
 	if execution.Completion != judge.CompletionFinished {
@@ -391,9 +428,7 @@ func TestGroupFoldOverMemberOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			completions := make([]judge.Completion, 0, len(tc.states))
-			for _, state := range tc.states {
-				completions = append(completions, state)
-			}
+			completions = append(completions, tc.states...)
 			got, err := judge.FoldGroup(completions)
 			if tc.wantErr {
 				if !errors.Is(err, judge.ErrEmptyGroup) {
@@ -407,5 +442,3 @@ func TestGroupFoldOverMemberOutcomes(t *testing.T) {
 		})
 	}
 }
-
-func ptr(v float64) *float64 { return &v }

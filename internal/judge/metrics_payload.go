@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Structured named-metrics result payload for the script judge (#317, slice 1).
@@ -49,7 +50,7 @@ func ParseMetricsPayload(raw []byte, invocationID string) ([]EmittedMetric, Payl
 		if errors.As(err, &typeErr) {
 			return nil, ProblemTopLevelShape
 		}
-		if bytes.Contains([]byte(err.Error()), []byte("unknown field")) {
+		if strings.Contains(err.Error(), "unknown field") {
 			return nil, ProblemUnknownTopField
 		}
 		return nil, ProblemUnparseable

@@ -10,8 +10,10 @@ import (
 // unattributable cancellation stays "unknown" instead of being guessed as
 // user-initiated.
 
-type signalObserverKey struct{}
-type deadlineSourceKey struct{}
+type (
+	signalObserverKey struct{}
+	deadlineSourceKey struct{}
+)
 
 // SignalObserver records whether this process actually observed an interrupt.
 // The flag is set by the signal handler path, never inferred afterwards.

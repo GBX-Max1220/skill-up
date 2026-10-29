@@ -17,6 +17,19 @@ import (
 // JudgeOutcome preserves one independent judge result for evaluator callers.
 type JudgeOutcome = judge.Outcome
 
+const judgeTimeoutSource = "judge.timeout_seconds"
+
+// MemberDecision indicates whether a judge result was accepted as the member's
+// final outcome or interrupted before acceptance.
+type MemberDecision uint8
+
+const (
+	// MemberNotAccepted means execution did not produce an accepted final result.
+	MemberNotAccepted MemberDecision = iota
+	// MemberAccepted means the judge's final result is retained.
+	MemberAccepted
+)
+
 func judgePlanNeedsWorkspaceDiff(plan config.JudgePlan) bool {
 	return slices.ContainsFunc(plan.Judges, judgeNeedsWorkspaceDiff)
 }
@@ -36,7 +49,7 @@ func (e *defaultEvaluator) runMultipleJudges(
 	var causes []error
 	for i, member := range plan.Judges {
 		if ctx.Err() != nil {
-			stop := judge.ClassifyStop(ctx.Err(), DeadlineSource(ctx), SignalObserved(ctx))
+			stop := judge.ClassifyStop(ctx.Err(), judge.StopObservation{DeadlineSource: DeadlineSource(ctx), SignalObserved: SignalObserved(ctx)})
 			for _, pending := range plan.Judges[i:] {
 				result.JudgeResults = append(result.JudgeResults, JudgeOutcome{
 					ID: pending.ID, Type: pending.Type, Status: judge.StatusSkip,
@@ -47,48 +60,8 @@ func (e *defaultEvaluator) runMultipleJudges(
 			}
 			break
 		}
-		started := time.Now()
-		outcome := JudgeOutcome{ID: member.ID, Type: member.Type, Artifacts: "judge/" + member.ID + "/run"}
-		e.prepareOutputDir(ctx, configName, caseCfg.ID, outcome.Artifacts)
-		memberCtx := ctx
-		memberTimeout := member.TimeoutSeconds != nil && *member.TimeoutSeconds > 0
-		cancel := func() {}
-		if memberTimeout {
-			memberCtx, cancel = context.WithTimeout(ctx, time.Duration(*member.TimeoutSeconds)*time.Second)
-		}
-		memberResult := &EvalResult{SessionResult: result.SessionResult, CaseID: result.CaseID, CaseName: result.CaseName}
-		graded := e.runJudgePhase(memberCtx, rt, caseCfg, configName, member, turnsTotal, runAgent, input, memberResult, outcome.Artifacts, true)
-		outcome.Status, outcome.Result = graded.Status, graded.Grading
-		outcome.Session, outcome.Skills = graded.JudgeSession, graded.JudgeSkills
-		if graded.Grading != nil {
-			outcome.Recovery = graded.Grading.Recovery
-		}
-		outcome.Error = judgeOutcomeError(graded)
-		if graded.Status == judge.StatusError && graded.Error != nil {
-			causes = append(causes, graded.Error)
-		}
-		stop := memberStop(ctx, memberCtx, memberTimeout)
-		// A member is accepted only when it reached its own final outcome: no stop
-		// at all, or a deadline that still left usable collected scores. A
-		// cancellation that arrived while the member was running never counts as
-		// acceptance, so its slots stay NOT_PRODUCED instead of looking like an
-		// omitted metric, and its verdict is not laundered into a completed run.
-		accepted := false
-		if graded.Grading != nil && graded.Status != judge.StatusError {
-			switch stop.Cause {
-			case judge.CauseNone:
-				accepted = true
-			case judge.CauseDeadlineExpiry:
-				accepted = envelopeHasScores(graded.Grading.Metrics)
-			}
-		}
-		outcome.Metrics = gradedMetrics(member, graded, accepted)
-		outcome.Execution = memberExecution(graded, stop, accepted)
-		if memberErr := recordMemberContextError(memberCtx, &outcome, accepted); memberErr != nil {
-			causes = append(causes, memberErr)
-		}
-		cancel()
-		outcome.DurationMs = time.Since(started).Milliseconds()
+		outcome, memberCauses := e.runJudgeMember(ctx, rt, caseCfg, configName, member, turnsTotal, runAgent, input, result)
+		causes = append(causes, memberCauses...)
 		result.JudgeResults = append(result.JudgeResults, outcome)
 	}
 	result.Grading, result.Status = judge.DefaultOutcomeAggregator().Aggregate(result.JudgeResults, result.Turns, turnsTotal)
@@ -100,14 +73,65 @@ func (e *defaultEvaluator) runMultipleJudges(
 	return *result
 }
 
-func recordMemberContextError(ctx context.Context, outcome *JudgeOutcome, accepted bool) error {
+func (e *defaultEvaluator) runJudgeMember(ctx context.Context, rt runtime.Runtime, caseCfg *config.CaseConfig, configName string, member config.JudgeConfig, turnsTotal int, runAgent agent.Agent, input judge.Input, result *EvalResult) (JudgeOutcome, []error) {
+	started := time.Now()
+	outcome := JudgeOutcome{ID: member.ID, Type: member.Type, Artifacts: "judge/" + member.ID + "/run"}
+	e.prepareOutputDir(ctx, configName, caseCfg.ID, outcome.Artifacts)
+	memberCtx := ctx
+	memberDeadlineSource := ""
+	cancel := func() {}
+	if member.TimeoutSeconds != nil && *member.TimeoutSeconds > 0 {
+		memberCtx, cancel = context.WithTimeout(ctx, time.Duration(*member.TimeoutSeconds)*time.Second)
+		memberDeadlineSource = judgeTimeoutSource
+	}
+	defer cancel()
+	memberResult := &EvalResult{SessionResult: result.SessionResult, CaseID: result.CaseID, CaseName: result.CaseName}
+	graded := e.runJudgePhase(memberCtx, rt, caseCfg, configName, member, turnsTotal, runAgent, input, memberResult, outcome.Artifacts, true)
+	finalizeJudgeMetrics(memberCtx, &graded, member)
+	outcome.Status, outcome.Result = graded.Status, graded.Grading
+	outcome.Session, outcome.Skills = graded.JudgeSession, graded.JudgeSkills
+	if graded.Grading != nil {
+		outcome.Recovery = graded.Grading.Recovery
+	}
+	outcome.Error = judgeOutcomeError(graded)
+	causes := []error{}
+	if graded.Status == judge.StatusError && graded.Error != nil {
+		causes = append(causes, graded.Error)
+	}
+	stop := memberStop(ctx, memberCtx, memberDeadlineSource)
+	decision := memberDecisionFor(graded, stop)
+	outcome.Metrics = gradedMetrics(member, graded, decision)
+	outcome.Execution = memberExecution(graded, stop, decision, judge.SlotsFromConfig(member.Metrics))
+	if memberErr := recordMemberContextError(memberCtx, &outcome, decision); memberErr != nil {
+		causes = append(causes, memberErr)
+	}
+	outcome.DurationMs = time.Since(started).Milliseconds()
+	return outcome, causes
+}
+
+func memberDecisionFor(graded EvalResult, stop judge.Stop) MemberDecision {
+	if graded.Grading == nil || graded.Status == judge.StatusError {
+		return MemberNotAccepted
+	}
+	switch stop.Cause {
+	case judge.CauseNone:
+		return MemberAccepted
+	case judge.CauseDeadlineExpiry:
+		if envelopeHasScores(graded.Grading.Metrics) {
+			return MemberAccepted
+		}
+	}
+	return MemberNotAccepted
+}
+
+func recordMemberContextError(ctx context.Context, outcome *JudgeOutcome, decision MemberDecision) error {
 	err := ctx.Err()
 	if err == nil {
 		return nil
 	}
 	// An accepted outcome keeps its own verdict; the stop is still recorded so the
 	// timeout or cancellation stays visible in the execution metadata.
-	if !accepted && outcome.Status != judge.StatusError {
+	if decision != MemberAccepted && outcome.Status != judge.StatusError {
 		outcome.Status = judge.StatusError
 		outcome.Error = err.Error()
 	}
@@ -117,15 +141,19 @@ func recordMemberContextError(ctx context.Context, outcome *JudgeOutcome, accept
 // memberStop resolves why a member stopped. A member-level deadline is only
 // attributed to judge.timeout_seconds when the parent context had not itself
 // expired, so a case deadline firing through the member is never mislabeled.
-func memberStop(parentCtx, memberCtx context.Context, memberTimeout bool) judge.Stop {
+func memberStop(parentCtx, memberCtx context.Context, memberDeadlineSource string) judge.Stop {
 	if memberCtx.Err() == nil {
 		return judge.Stop{Cause: judge.CauseNone}
 	}
-	source := DeadlineSource(parentCtx)
-	if memberTimeout && source == "" && parentCtx.Err() == nil && errors.Is(memberCtx.Err(), context.DeadlineExceeded) {
-		source = "judge.timeout_seconds"
+	var source string
+	if errors.Is(memberCtx.Err(), context.DeadlineExceeded) {
+		if parentCtx.Err() != nil {
+			source = DeadlineSource(parentCtx)
+		} else {
+			source = memberDeadlineSource
+		}
 	}
-	return judge.ClassifyStop(memberCtx.Err(), source, SignalObserved(parentCtx))
+	return judge.ClassifyStop(memberCtx.Err(), judge.StopObservation{DeadlineSource: source, SignalObserved: SignalObserved(parentCtx)})
 }
 
 // stopDetail renders a human-readable stop note. The machine-readable cause and
@@ -164,13 +192,13 @@ func preventedMetrics(judgeID string, registry []config.MetricConfig) *judge.Met
 	if len(slots) == 0 {
 		return nil
 	}
-	return judge.MaterializeSlots(judgeID, slots, nil, judge.ProblemNone, true)
+	return judge.MaterializeSlots(judgeID, slots, nil, judge.ProblemNone, judge.MetricPrevented)
 }
 
 // gradedMetrics builds the envelope from what a judge produced. A score that was
 // already collected survives a later stop; slots that were never reached stay
 // NOT_PRODUCED rather than becoming zero or looking omitted.
-func gradedMetrics(member config.JudgeConfig, graded EvalResult, accepted bool) *judge.MetricsEnvelope {
+func gradedMetrics(member config.JudgeConfig, graded EvalResult, decision MemberDecision) *judge.MetricsEnvelope {
 	slots := judge.SlotsFromConfig(member.Metrics)
 	if len(slots) == 0 {
 		return nil
@@ -181,31 +209,25 @@ func gradedMetrics(member config.JudgeConfig, graded EvalResult, accepted bool) 
 	// Anything the execution layer stopped before a final outcome leaves its slots
 	// NOT_PRODUCED: the metric was never reached, which is not the same as a judge
 	// omitting or declining a metric in a completed result.
-	prevented := !accepted
-	return judge.MaterializeSlots(member.ID, slots, nil, judge.ProblemNone, prevented)
+	production := judge.MetricPrevented
+	if decision == MemberAccepted {
+		production = judge.MetricProduced
+	}
+	return judge.MaterializeSlots(member.ID, slots, nil, judge.ProblemNone, production)
 }
 
 // memberExecution describes one member's execution facts. Accepted results report
 // their own completion; a stopped member without a final outcome is INTERRUPTED
 // whether or not it had started, with the stage recording which of the two it was.
-func memberExecution(graded EvalResult, stop judge.Stop, accepted bool) *judge.ExecutionMetadata {
-	if accepted {
-		completion := judge.CompletionFinished
-		if graded.Grading.Metrics != nil {
-			completion = completionForContract(graded.Grading.Metrics)
-		}
-		meta := &judge.ExecutionMetadata{
-			Stage:      judge.StageFinished,
-			Completion: completion,
-			Cause:      judge.CauseNone,
-		}
-		if stop.Cause != judge.CauseNone {
-			meta.Cause, meta.DeadlineSource, meta.CancelSource, meta.Detail = stop.Cause, stop.DeadlineSource, stop.CancelSource, stop.Detail
-			if stop.Cause == judge.CauseDeadlineExpiry {
-				meta.Timeout = &judge.TimeoutMetadata{Occurred: true, Source: stop.DeadlineSource, Recovered: graded.Grading.Recovery != nil}
-			}
-		}
-		return meta
+func memberExecution(graded EvalResult, stop judge.Stop, decision MemberDecision, planned []judge.MetricSlot) *judge.ExecutionMetadata {
+	if decision != MemberAccepted && graded.Execution != nil && graded.Execution.Stage == judge.StageFinished {
+		// A completed scoring pass can still violate the metric contract. Preserve
+		// its FAILED/INCOMPLETE completion rather than rewriting it as an execution
+		// interruption merely because the compatibility verdict is ERROR.
+		return graded.Execution
+	}
+	if decision == MemberAccepted {
+		return acceptedMemberExecution(graded, stop, planned)
 	}
 	stage := judge.StageStarted
 	if graded.Grading == nil && graded.Status == judge.StatusSkip {
@@ -224,23 +246,47 @@ func memberExecution(graded EvalResult, stop judge.Stop, accepted bool) *judge.E
 	return execution
 }
 
+func acceptedMemberExecution(graded EvalResult, stop judge.Stop, planned []judge.MetricSlot) *judge.ExecutionMetadata {
+	completion := judge.CompletionFinished
+	env := graded.Metrics
+	if graded.Grading != nil && graded.Grading.Metrics != nil {
+		env = graded.Grading.Metrics
+	}
+	if env != nil {
+		completion = completionForContract(env, planned)
+	}
+	meta := &judge.ExecutionMetadata{Stage: judge.StageFinished, Completion: completion, Cause: judge.CauseNone}
+	if stop.Cause == judge.CauseNone {
+		return meta
+	}
+	meta.Cause, meta.DeadlineSource, meta.CancelSource, meta.Detail = stop.Cause, stop.DeadlineSource, stop.CancelSource, stop.Detail
+	if stop.Cause == judge.CauseDeadlineExpiry {
+		meta.Timeout = &judge.TimeoutMetadata{Occurred: true, Source: stop.DeadlineSource, Recovered: graded.Grading.Recovery != nil}
+	}
+	return meta
+}
+
 // completionForContract maps the materialized slots onto the completion states:
 // an errored slot failed the contract, an unfulfilled required slot or an
 // unevaluable threshold leaves the outcome incomplete.
-func completionForContract(env *judge.MetricsEnvelope) judge.Completion {
-	requiredMissing := false
+func completionForContract(env *judge.MetricsEnvelope, planned []judge.MetricSlot) judge.Completion {
+	if env == nil {
+		return judge.CompletionFinished
+	}
+	byID := make(map[string]judge.MetricResult, len(env.Metrics))
 	for _, metric := range env.Metrics {
+		byID[metric.MetricID] = metric
 		if metric.Availability == judge.Errored {
 			return judge.CompletionFailed
 		}
 	}
-	for _, metric := range env.Metrics {
-		if metric.Availability != judge.Available {
-			requiredMissing = true
+	for _, slot := range planned {
+		metric, ok := byID[slot.ID]
+		if !ok || metric.Availability != judge.Available {
+			if slot.Required || slot.MinScore != nil {
+				return judge.CompletionIncomplete
+			}
 		}
-	}
-	if requiredMissing {
-		return judge.CompletionIncomplete
 	}
 	return judge.CompletionFinished
 }
@@ -286,10 +332,17 @@ func summarizeJudgeErrors(outcomes []JudgeOutcome) string {
 // reason strings are unchanged for compatibility; the machine-readable cause is
 // the new source of truth.
 func recordSkippedJudges(result *EvalResult, plan config.JudgePlan, reason string) {
+	cause := causeForReason(reason)
 	if !plan.Multi {
+		if len(plan.Judges) > 0 {
+			member := plan.Judges[0]
+			result.Metrics = preventedMetrics(member.ID, member.Metrics)
+			if result.Metrics != nil {
+				result.Execution = interruptedExecution(judge.StageNotInvoked, judge.Stop{Cause: cause, Detail: reason})
+			}
+		}
 		return
 	}
-	cause := causeForReason(reason)
 	for _, member := range plan.Judges {
 		result.JudgeResults = append(result.JudgeResults, JudgeOutcome{
 			ID: member.ID, Type: member.Type, Status: judge.StatusSkip, SkipReason: reason,
@@ -297,6 +350,7 @@ func recordSkippedJudges(result *EvalResult, plan config.JudgePlan, reason strin
 			Metrics:   preventedMetrics(member.ID, member.Metrics),
 		})
 	}
+	result.GroupCompletion, result.GroupCause = foldGroupState(result.JudgeResults)
 }
 
 func causeForReason(reason string) judge.Cause {

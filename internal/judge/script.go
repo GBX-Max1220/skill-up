@@ -43,6 +43,9 @@ type ScriptJudge struct {
 	// MetricSlots is the planned named-metric registry for this judge. Empty means
 	// the judge produces no metrics envelope at all.
 	MetricSlots []MetricSlot
+	// MetricJudgeID is the stable configured judge identifier recorded in the
+	// metrics envelope. Empty preserves the standalone "script" identifier.
+	MetricJudgeID string
 
 	// MetricsResultPath is the runner-assigned host path for this invocation's
 	// structured result. Set only when the script runs against the local runtime.
@@ -147,19 +150,7 @@ func (j *ScriptJudge) evaluateInRuntime(ctx context.Context, rt evalruntime.Runt
 	debugInfo := strings.TrimSpace(result.Stderr)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			// A timeout does not invalidate a trustworthy result: if this
-			// invocation's own schema-valid file was written before the deadline,
-			// the scores are collected while the existing verdict mapping and the
-			// timeout record are preserved.
-			if j.TimeoutIsError {
-				timeoutErr := fmt.Errorf("script timed out after %s: %w", timeout, ctx.Err())
-				res := NewErrorResult(timeoutErr, in.TurnsExecuted, in.TurnsTotal)
-				j.attachMetrics(res, in, true)
-				return res, timeoutErr
-			}
-			res := j.buildResult(false, "script timed out after "+timeout.String(), debugInfo, in)
-			j.attachMetrics(res, in, true)
-			return res, nil
+			return j.timeoutResult(ctx, timeout, debugInfo, in)
 		}
 		if result.ExitCode == 0 {
 			return nil, fmt.Errorf("script execution failed: %w", err)
@@ -180,7 +171,28 @@ func (j *ScriptJudge) evaluateInRuntime(ctx context.Context, rt evalruntime.Runt
 		evidence = "script passed (exit code 0)"
 	}
 	res := j.buildResult(true, evidence, debugInfo, in)
-	j.attachMetrics(res, in, false)
+	j.attachMetrics(res, MetricProduced)
+	return res, nil
+}
+
+func (j *ScriptJudge) timeoutResult(ctx context.Context, timeout time.Duration, debugInfo string, in Input) (*Result, error) {
+	source := "judge.timeout_seconds"
+	execution := &ExecutionMetadata{
+		Stage: StageStarted, Completion: CompletionInterrupted,
+		Cause: CauseDeadlineExpiry, DeadlineSource: source,
+		Timeout: &TimeoutMetadata{Occurred: true, Source: source},
+	}
+	// Keep a trustworthy result written before the deadline.
+	if j.TimeoutIsError {
+		timeoutErr := fmt.Errorf("script timed out after %s: %w", timeout, ctx.Err())
+		res := NewErrorResult(timeoutErr, in.TurnsExecuted, in.TurnsTotal)
+		res.Execution = execution
+		j.attachMetrics(res, MetricPrevented)
+		return res, timeoutErr
+	}
+	res := j.buildResult(false, "script timed out after "+timeout.String(), debugInfo, in)
+	res.Execution = execution
+	j.attachMetrics(res, MetricPrevented)
 	return res, nil
 }
 
@@ -209,22 +221,26 @@ func (j *ScriptJudge) buildResult(passed bool, evidence, debugInfo string, in In
 // appeared while evaluation was interrupted yields NOT_PRODUCED, and one that
 // never appeared after a completed run yields a rejected payload rather than a
 // fabricated zero.
-func (j *ScriptJudge) attachMetrics(res *Result, in Input, prevented bool) {
+func (j *ScriptJudge) attachMetrics(res *Result, production MetricProduction) {
 	if res == nil || len(j.MetricSlots) == 0 {
 		return
+	}
+	judgeID := j.MetricJudgeID
+	if judgeID == "" {
+		judgeID = "script"
 	}
 	if j.MetricsResultPath == "" {
 		// The channel is not available for this judge (a non-local runtime, or a
 		// judge built without one). Report that honestly rather than implying a
 		// stale file was found.
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemChannelUnsupported, prevented)
+		res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, nil, ProblemChannelUnsupported, production)
 		return
 	}
 	info, err := os.Lstat(j.MetricsResultPath)
-	if errors.Is(err, os.ErrNotExist) && prevented {
+	if errors.Is(err, os.ErrNotExist) && production == MetricPrevented {
 		// Nothing was ever produced because evaluation was interrupted: the slots
 		// are NOT_PRODUCED, not a rejected payload.
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemNone, true)
+		res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, nil, ProblemNone, MetricPrevented)
 		return
 	}
 	if err != nil {
@@ -232,25 +248,25 @@ func (j *ScriptJudge) attachMetrics(res *Result, in Input, prevented bool) {
 		if !os.IsNotExist(err) {
 			problem = ProblemUnparseable
 		}
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, problem, prevented)
+		res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, nil, problem, production)
 		return
 	}
 	if !info.Mode().IsRegular() {
 		// A symlink, directory or device node is never a collected result.
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemUnboundResult, prevented)
+		res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, nil, ProblemUnboundResult, production)
 		return
 	}
 	if info.Size() > MaxMetricsPayloadBytes {
 		// Bound the read before it happens: an oversized file must not be loaded
 		// into memory just to be rejected afterwards.
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemSizeLimit, prevented)
+		res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, nil, ProblemSizeLimit, production)
 		return
 	}
 	raw, err := os.ReadFile(j.MetricsResultPath)
 	if err != nil {
-		res.Metrics = MaterializeSlots("script", j.MetricSlots, nil, ProblemUnparseable, prevented)
+		res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, nil, ProblemUnparseable, production)
 		return
 	}
 	emitted, payloadProblem := ParseMetricsPayload(raw, j.MetricsInvocationID)
-	res.Metrics = MaterializeSlots("script", j.MetricSlots, emitted, payloadProblem, false)
+	res.Metrics = MaterializeSlots(judgeID, j.MetricSlots, emitted, payloadProblem, MetricProduced)
 }

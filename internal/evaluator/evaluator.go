@@ -117,6 +117,11 @@ type EvalResult struct {
 	GroupCompletion judge.Completion
 	GroupCause      judge.Cause
 
+	// Execution and Metrics preserve the named-metric contract on single-judge
+	// paths, including outcomes that have no grading result.
+	Execution *judge.ExecutionMetadata `json:"execution,omitempty"`
+	Metrics   *judge.MetricsEnvelope   `json:"metrics,omitempty"`
+
 	// JudgeSession is the separate agent session used by agent_judge. It is
 	// preserved even when the judge fails to produce a valid grading result.
 	JudgeSession *agent.SessionResult
@@ -129,6 +134,10 @@ type EvalResult struct {
 
 	// Error holds any execution error.
 	Error error
+
+	// judgeInvoked records whether this case reached Judge.Evaluate. It is used
+	// only while deriving execution metadata for configured metric slots.
+	judgeStage judge.Stage
 
 	// Configuration is "with_skill" or "without_skill".
 	Configuration string
@@ -458,6 +467,7 @@ func (e *defaultEvaluator) executeCaseOnce(ctx context.Context, caseCfg *config.
 			result.Status = judge.StatusError
 			result.Error = fmt.Errorf("agent %s preflight failed: %w", runAgent.Name(), err)
 			result.Configuration = configName
+			e.recordSkippedJudgesForCase(&result, caseCfg, "agent_execution_failed")
 			return result
 		}
 	} else {
@@ -467,6 +477,7 @@ func (e *defaultEvaluator) executeCaseOnce(ctx context.Context, caseCfg *config.
 			result.Status = judge.StatusError
 			result.Error = err
 			result.Configuration = configName
+			e.recordSkippedJudgesForCase(&result, caseCfg, "agent_execution_failed")
 			return result
 		}
 		defer func() { _ = rt.Close() }()
@@ -632,6 +643,7 @@ func (e *defaultEvaluator) evaluateCaseSession(
 		if plan.Multi {
 			result.Grading, _ = judge.DefaultOutcomeAggregator().Aggregate(result.JudgeResults, result.Turns, turnsTotal)
 			result.Grading.Status = judge.StatusFail
+			result.GroupCompletion, result.GroupCause = foldGroupState(result.JudgeResults)
 		}
 		return *result
 	}
@@ -646,6 +658,9 @@ func (e *defaultEvaluator) evaluateCaseSession(
 		finalResult = e.runMultipleJudges(ctx, rt, caseCfg, configName, plan, turnsTotal, runAgent, judgeInput, result)
 	} else {
 		finalResult = e.runJudgePhase(ctx, rt, caseCfg, configName, judgeCfg, turnsTotal, runAgent, judgeInput, result, "judge/run", false)
+		if len(plan.Judges) > 0 {
+			finalizeJudgeMetrics(ctx, &finalResult, plan.Judges[0])
+		}
 	}
 	if !plan.Multi && len(expectAssertions) > 0 && finalResult.Grading != nil {
 		finalResult.Grading.AssertionResults = append(expectAssertions, finalResult.Grading.AssertionResults...)
@@ -762,6 +777,7 @@ func (e *defaultEvaluator) runJudgePhaseWithSpan(
 	defer cleanupScript()
 	e.configureMetricsChannel(ctx, j, configName, caseCfg, artifactRoot)
 
+	result.judgeStage = judge.StageStarted
 	grading, err := j.Evaluate(ctx, judgeInput)
 	if err != nil {
 		result.Grading = grading

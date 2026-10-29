@@ -44,14 +44,22 @@ const (
 type Cause string
 
 const (
-	CauseNone           Cause = "none"
-	CauseCancellation   Cause = "cancellation"
+	// CauseNone means no termination cause was recorded.
+	CauseNone Cause = "none"
+	// CauseCancellation means the evaluation context was cancelled.
+	CauseCancellation Cause = "cancellation"
+	// CauseDeadlineExpiry means an evaluation deadline expired.
 	CauseDeadlineExpiry Cause = "deadline_expiry"
-	CauseExpectGate     Cause = "expect_gate"
-	CauseProcessExit    Cause = "process_exit"
+	// CauseExpectGate means an expect pre-check prevented judge invocation.
+	CauseExpectGate Cause = "expect_gate"
+	// CauseProcessExit means a script exited unsuccessfully.
+	CauseProcessExit Cause = "process_exit"
+	// CauseExecutionError means evaluation failed during execution.
 	CauseExecutionError Cause = "execution_error"
-	CauseContractError  Cause = "contract_error"
-	CauseJudgeDeclined  Cause = "judge_declined"
+	// CauseContractError means an input or output violated the evaluation contract.
+	CauseContractError Cause = "contract_error"
+	// CauseJudgeDeclined means a judge completed but declined a required metric.
+	CauseJudgeDeclined Cause = "judge_declined"
 )
 
 // Stage is the program-recorded execution stage. INTERRUPTED members that
@@ -60,19 +68,27 @@ const (
 type Stage string
 
 const (
+	// StageNotInvoked means the judge was never called.
 	StageNotInvoked Stage = "NOT_INVOKED"
-	StageStarted    Stage = "STARTED"
-	StageFinished   Stage = "COMPLETED"
+	// StageStarted means the judge was called but did not finish normally.
+	StageStarted Stage = "STARTED"
+	// StageFinished means the judge returned a final result.
+	StageFinished Stage = "COMPLETED"
 )
 
 // Availability describes one planned metric slot.
 type Availability string
 
 const (
-	Available   Availability = "AVAILABLE"
-	Missing     Availability = "MISSING"
-	Errored     Availability = "ERROR"
-	Declined    Availability = "SKIP"
+	// Available means a valid score was produced.
+	Available Availability = "AVAILABLE"
+	// Missing means the judge completed without producing this slot.
+	Missing Availability = "MISSING"
+	// Errored means this slot or its payload was invalid.
+	Errored Availability = "ERROR"
+	// Declined means the judge explicitly skipped this slot.
+	Declined Availability = "SKIP"
+	// NotProduced means evaluation stopped before this slot was produced.
 	NotProduced Availability = "NOT_PRODUCED"
 )
 
@@ -80,11 +96,16 @@ const (
 type Quality string
 
 const (
-	QualityMet           Quality = "MET"
-	QualityNotMet        Quality = "NOT_MET"
-	QualityUnknown       Quality = "UNKNOWN"
+	// QualityMet means every configured threshold was met.
+	QualityMet Quality = "MET"
+	// QualityNotMet means at least one configured threshold was missed.
+	QualityNotMet Quality = "NOT_MET"
+	// QualityUnknown means a configured threshold could not be evaluated.
+	QualityUnknown Quality = "UNKNOWN"
+	// QualityNotConfigured means scores exist but no thresholds were configured.
 	QualityNotConfigured Quality = "NOT_CONFIGURED"
-	QualityNotAssessed   Quality = "NOT_ASSESSED"
+	// QualityNotAssessed means no usable scores exist.
+	QualityNotAssessed Quality = "NOT_ASSESSED"
 )
 
 // Only two cancel sources are actually detectable today: a process interrupt observed by
@@ -108,24 +129,30 @@ type Stop struct {
 	Detail         string
 }
 
+// StopObservation contains provenance observed at the stop boundary.
+type StopObservation struct {
+	DeadlineSource string
+	SignalObserved bool
+}
+
 // ClassifyStop turns an observed context error into a cause plus its source.
 // deadlineSource names the configuration knob when a deadline was configured and
 // empty means the deadline's origin is unknown; signalObserved is true only when
 // the process actually saw an interrupt, because a bare context.Canceled does not
 // establish user-initiated cancellation.
-func ClassifyStop(ctxErr error, deadlineSource string, signalObserved bool) Stop {
+func ClassifyStop(ctxErr error, observation StopObservation) Stop {
 	switch {
 	case ctxErr == nil:
 		return Stop{Cause: CauseNone}
 	case errors.Is(ctxErr, context.DeadlineExceeded):
-		source := deadlineSource
+		source := observation.DeadlineSource
 		if source == "" {
 			source = CancelUnspecified
 		}
 		return Stop{Cause: CauseDeadlineExpiry, DeadlineSource: source, Detail: ctxErr.Error()}
 	case errors.Is(ctxErr, context.Canceled):
 		source := CancelUnspecified
-		if signalObserved {
+		if observation.SignalObserved {
 			source = CancelOSSignal
 		}
 		return Stop{Cause: CauseCancellation, CancelSource: source, Detail: ctxErr.Error()}
@@ -299,17 +326,36 @@ type EmittedMetric struct {
 type PayloadProblem string
 
 const (
-	ProblemNone             PayloadProblem = ""
-	ProblemUnparseable      PayloadProblem = "unparseable_payload"
-	ProblemTopLevelShape    PayloadProblem = "top_level_shape"
+	// ProblemNone means the payload passed whole-envelope validation.
+	ProblemNone PayloadProblem = ""
+	// ProblemUnparseable means the JSON payload could not be decoded.
+	ProblemUnparseable PayloadProblem = "unparseable_payload"
+	// ProblemTopLevelShape means the payload root had the wrong JSON type.
+	ProblemTopLevelShape PayloadProblem = "top_level_shape"
+	// ProblemDuplicateJSONKey means a JSON object repeats a key.
 	ProblemDuplicateJSONKey PayloadProblem = "duplicate_json_key"
-	ProblemUnknownTopField  PayloadProblem = "unknown_top_level_field"
-	ProblemSchemaVersion    PayloadProblem = "schema_version"
-	ProblemUnboundResult    PayloadProblem = "unbound_or_stale_result"
-	ProblemSizeLimit        PayloadProblem = "size_limit"
+	// ProblemUnknownTopField means the envelope contains an undeclared field.
+	ProblemUnknownTopField PayloadProblem = "unknown_top_level_field"
+	// ProblemSchemaVersion means the payload schema version is unsupported.
+	ProblemSchemaVersion PayloadProblem = "schema_version"
+	// ProblemUnboundResult means the result is not bound to this invocation.
+	ProblemUnboundResult PayloadProblem = "unbound_or_stale_result"
+	// ProblemSizeLimit means the payload exceeds the collection size limit.
+	ProblemSizeLimit PayloadProblem = "size_limit"
 	// ProblemChannelUnsupported is not a payload defect: it says the collection channel
 	// itself was unavailable for this run, so no file could ever have been produced.
 	ProblemChannelUnsupported PayloadProblem = "metrics_channel_unsupported"
+)
+
+// MetricProduction records whether a judge reached a final outcome before its
+// metric slots were materialized.
+type MetricProduction uint8
+
+const (
+	// MetricProduced means evaluation reached a final outcome.
+	MetricProduced MetricProduction = iota
+	// MetricPrevented means a gate, stop, or execution failure prevented output.
+	MetricPrevented
 )
 
 // MaterializeSlots builds exactly one result per planned slot. Unknown ids are
@@ -320,7 +366,7 @@ const (
 // deadline, execution failure), so slots that were never reached become
 // NOT_PRODUCED instead of being reported as producer errors. A score that was
 // already obtained is never downgraded because evaluation stopped afterwards.
-func MaterializeSlots(judgeID string, planned []MetricSlot, emitted []EmittedMetric, problem PayloadProblem, prevented bool) *MetricsEnvelope {
+func MaterializeSlots(judgeID string, planned []MetricSlot, emitted []EmittedMetric, problem PayloadProblem, production MetricProduction) *MetricsEnvelope {
 	known := make(map[string]bool, len(planned))
 	for _, s := range planned {
 		known[s.ID] = true
@@ -342,12 +388,12 @@ func MaterializeSlots(judgeID string, planned []MetricSlot, emitted []EmittedMet
 		case problem != ProblemNone:
 			out = append(out, MetricResult{MetricID: s.ID, Availability: Errored, Reason: string(problem)})
 		case len(entries) == 0:
-			out = append(out, emptySlot(s, prevented))
+			out = append(out, emptySlot(s, production))
 		case len(entries) > 1:
 			diagnostics = append(diagnostics, "duplicate_metric_id: "+s.ID)
 			out = append(out, MetricResult{MetricID: s.ID, Availability: Errored, Reason: "duplicate_metric_id"})
 		default:
-			out = append(out, resolveSlot(s, entries[0], prevented))
+			out = append(out, resolveSlot(s, entries[0], production))
 		}
 	}
 	sort.Strings(diagnostics)
@@ -360,8 +406,8 @@ func MaterializeSlots(judgeID string, planned []MetricSlot, emitted []EmittedMet
 	return env
 }
 
-func emptySlot(s MetricSlot, prevented bool) MetricResult {
-	if prevented {
+func emptySlot(s MetricSlot, production MetricProduction) MetricResult {
+	if production == MetricPrevented {
 		return MetricResult{MetricID: s.ID, Availability: NotProduced, Reason: "evaluation_prevented"}
 	}
 	if s.Required {
@@ -370,13 +416,13 @@ func emptySlot(s MetricSlot, prevented bool) MetricResult {
 	return MetricResult{MetricID: s.ID, Availability: Missing, Reason: "not_emitted"}
 }
 
-func resolveSlot(s MetricSlot, e EmittedMetric, prevented bool) MetricResult {
+func resolveSlot(s MetricSlot, e EmittedMetric, production MetricProduction) MetricResult {
 	res := MetricResult{MetricID: s.ID, Evidence: e.Evidence, Reason: e.Reason}
 	switch strings.ToUpper(strings.TrimSpace(e.Availability)) {
 	case "SKIP", "MISSING":
 		// A decline or omission is only meaningful from an evaluation that
 		// reached the slot; a stopped evaluation leaves NOT_PRODUCED instead.
-		if prevented {
+		if production == MetricPrevented {
 			res.Availability, res.Reason = NotProduced, "evaluation_prevented"
 			return res
 		}

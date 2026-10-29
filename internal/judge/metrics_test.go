@@ -11,8 +11,6 @@ import (
 	"github.com/alibaba/skill-up/internal/config"
 )
 
-func f(v float64) *float64 { return &v }
-
 func twoSlots() []MetricSlot {
 	return []MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}}
 }
@@ -61,50 +59,50 @@ func TestDeriveQuality(t *testing.T) {
 	}{
 		{
 			"thresholds configured and all satisfied",
-			[]MetricSlot{{ID: "a", MinScore: f(0.7)}, {ID: "b", MinScore: f(0.5)}},
-			[]MetricResult{{MetricID: "a", Availability: Available, Value: f(0.7)}, {MetricID: "b", Availability: Available, Value: f(0.9)}},
+			[]MetricSlot{{ID: "a", MinScore: new(0.7)}, {ID: "b", MinScore: new(0.5)}},
+			[]MetricResult{{MetricID: "a", Availability: Available, Value: new(0.7)}, {MetricID: "b", Availability: Available, Value: new(0.9)}},
 			QualityMet,
 		},
 		{
 			"threshold boundary is inclusive",
-			[]MetricSlot{{ID: "a", MinScore: f(0.75)}},
-			[]MetricResult{{MetricID: "a", Availability: Available, Value: f(0.75)}},
+			[]MetricSlot{{ID: "a", MinScore: new(0.75)}},
+			[]MetricResult{{MetricID: "a", Availability: Available, Value: new(0.75)}},
 			QualityMet,
 		},
 		{
 			"thresholds configured and one below",
-			[]MetricSlot{{ID: "a", MinScore: f(0.7)}, {ID: "b", MinScore: f(0.7)}},
-			[]MetricResult{{MetricID: "a", Availability: Available, Value: f(0.9)}, {MetricID: "b", Availability: Available, Value: f(0.2)}},
+			[]MetricSlot{{ID: "a", MinScore: new(0.7)}, {ID: "b", MinScore: new(0.7)}},
+			[]MetricResult{{MetricID: "a", Availability: Available, Value: new(0.9)}, {MetricID: "b", Availability: Available, Value: new(0.2)}},
 			QualityNotMet,
 		},
 		{
 			"thresholded value unavailable yields UNKNOWN",
-			[]MetricSlot{{ID: "a", MinScore: f(0.7)}, {ID: "b", MinScore: f(0.7)}},
-			[]MetricResult{{MetricID: "a", Availability: Available, Value: f(0.9)}, {MetricID: "b", Availability: Declined, Reason: "declined_by_judge"}},
+			[]MetricSlot{{ID: "a", MinScore: new(0.7)}, {ID: "b", MinScore: new(0.7)}},
+			[]MetricResult{{MetricID: "a", Availability: Available, Value: new(0.9)}, {MetricID: "b", Availability: Declined, Reason: "declined_by_judge"}},
 			QualityUnknown,
 		},
 		{
 			"cancellation with thresholds configured yields UNKNOWN",
-			[]MetricSlot{{ID: "a", MinScore: f(0.7)}},
+			[]MetricSlot{{ID: "a", MinScore: new(0.7)}},
 			[]MetricResult{{MetricID: "a", Availability: NotProduced, Reason: "evaluation_prevented"}},
 			QualityUnknown,
 		},
 		{
 			"gate short-circuit with thresholds configured yields UNKNOWN",
-			[]MetricSlot{{ID: "a", MinScore: f(0.7)}, {ID: "b", MinScore: f(0.7)}},
+			[]MetricSlot{{ID: "a", MinScore: new(0.7)}, {ID: "b", MinScore: new(0.7)}},
 			[]MetricResult{{MetricID: "a", Availability: NotProduced}, {MetricID: "b", Availability: NotProduced}},
 			QualityUnknown,
 		},
 		{
 			"valid scores and no thresholds is NOT_CONFIGURED",
 			twoSlots(),
-			[]MetricResult{{MetricID: "correctness", Availability: Available, Value: f(0.8)}, {MetricID: "completeness", Availability: Available, Value: f(0.6)}},
+			[]MetricResult{{MetricID: "correctness", Availability: Available, Value: new(0.8)}, {MetricID: "completeness", Availability: Available, Value: new(0.6)}},
 			QualityNotConfigured,
 		},
 		{
 			"an explicit zero score is a valid score",
 			twoSlots(),
-			[]MetricResult{{MetricID: "correctness", Availability: Available, Value: f(0)}},
+			[]MetricResult{{MetricID: "correctness", Availability: Available, Value: new(0.0)}},
 			QualityNotConfigured,
 		},
 		{
@@ -142,14 +140,14 @@ func TestValidScore(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"zero is valid", f(0), true},
-		{"one is valid", f(1), true},
-		{"negative", f(-0.01), false},
-		{"above one", f(1.4), false},
-		{"NaN is never clamped", f(math.NaN()), false},
-		{"positive infinity", f(math.Inf(1)), false},
-		{"negative infinity", f(math.Inf(-1)), false},
-		{"mid range", f(0.75), true},
+		{"zero is valid", new(0.0), true},
+		{"one is valid", new(1.0), true},
+		{"negative", new(-0.01), false},
+		{"above one", new(1.4), false},
+		{"NaN is never clamped", new(math.NaN()), false},
+		{"positive infinity", new(math.Inf(1)), false},
+		{"negative infinity", new(math.Inf(-1)), false},
+		{"mid range", new(0.75), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,80 +158,86 @@ func TestValidScore(t *testing.T) {
 	}
 }
 
-func TestMaterializeSlotsAvailability(t *testing.T) {
-	cases := []struct {
-		name        string
-		emitted     []EmittedMetric
-		prevented   bool
-		want        map[string]Availability
-		wantDiags   []string
-		wantPlanned int
-	}{
+type materializeCase struct {
+	name        string
+	emitted     []EmittedMetric
+	prevented   MetricProduction
+	want        map[string]Availability
+	wantDiags   []string
+	wantPlanned int
+}
+
+func materializeCases() []materializeCase {
+	return []materializeCase{
 		{
 			name:        "valid two-metric output",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.8)}, {MetricID: "completeness", Availability: "AVAILABLE", Value: f(0.5)}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.8)}, {MetricID: "completeness", Availability: "AVAILABLE", Value: new(0.5)}},
 			want:        map[string]Availability{"correctness": Available, "completeness": Available},
 			wantPlanned: 2,
 		},
 		{
 			name:        "optional omission is MISSING and required sibling survives",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.9)}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.9)}},
 			want:        map[string]Availability{"correctness": Available, "completeness": Missing},
 			wantPlanned: 2,
 		},
 		{
 			name:        "unknown id is a diagnostic and never a new slot",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.9)}, {MetricID: "invented", Availability: "AVAILABLE", Value: f(0.1)}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.9)}, {MetricID: "invented", Availability: "AVAILABLE", Value: new(0.1)}},
 			want:        map[string]Availability{"correctness": Available, "completeness": Missing},
 			wantDiags:   []string{"unknown_metric_id: invented"},
 			wantPlanned: 2,
 		},
 		{
 			name:        "duplicate id invalidates that planned slot once and keeps no other slot",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.9)}, {MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.2)}, {MetricID: "completeness", Availability: "AVAILABLE", Value: f(0.4)}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.9)}, {MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.2)}, {MetricID: "completeness", Availability: "AVAILABLE", Value: new(0.4)}},
 			want:        map[string]Availability{"correctness": Errored, "completeness": Available},
 			wantDiags:   []string{"duplicate_metric_id: correctness"},
 			wantPlanned: 2,
 		},
 		{
 			name:        "out of range value poisons only its own slot",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(1.4)}, {MetricID: "completeness", Availability: "AVAILABLE", Value: f(0.4)}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(1.4)}, {MetricID: "completeness", Availability: "AVAILABLE", Value: new(0.4)}},
 			want:        map[string]Availability{"correctness": Errored, "completeness": Available},
 			wantPlanned: 2,
 		},
 		{
 			name:        "non-finite value poisons only its own slot",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(math.NaN())}, {MetricID: "completeness", Availability: "AVAILABLE", Value: f(0.4)}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(math.NaN())}, {MetricID: "completeness", Availability: "AVAILABLE", Value: new(0.4)}},
 			want:        map[string]Availability{"correctness": Errored, "completeness": Available},
 			wantPlanned: 2,
 		},
 		{
 			name:        "judge-declared SKIP keeps its own reason and is never zero",
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.8)}, {MetricID: "completeness", Availability: "SKIP", Reason: "insufficient evidence"}},
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.8)}, {MetricID: "completeness", Availability: "SKIP", Reason: "insufficient evidence"}},
 			want:        map[string]Availability{"correctness": Available, "completeness": Declined},
 			wantPlanned: 2,
 		},
 		{
 			name:        "cancelled before or during invocation produces NOT_PRODUCED, never SKIP",
-			prevented:   true,
+			prevented:   MetricPrevented,
 			want:        map[string]Availability{"correctness": NotProduced, "completeness": NotProduced},
 			wantPlanned: 2,
 		},
 		{
 			name:        "a score obtained before the stop is not downgraded to NOT_PRODUCED",
-			prevented:   true,
-			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.7)}},
+			prevented:   MetricPrevented,
+			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.7)}},
 			want:        map[string]Availability{"correctness": Available, "completeness": NotProduced},
 			wantPlanned: 2,
 		},
 		{
 			name:        "a SKIP or MISSING claim from a stopped evaluation is NOT_PRODUCED, not a decline",
-			prevented:   true,
+			prevented:   MetricPrevented,
 			emitted:     []EmittedMetric{{MetricID: "correctness", Availability: "SKIP", Reason: "ran out of time"}},
 			want:        map[string]Availability{"correctness": NotProduced, "completeness": NotProduced},
 			wantPlanned: 2,
 		},
 	}
+}
+
+func TestMaterializeSlotsAvailability(t *testing.T) {
+	cases := materializeCases()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := MaterializeSlots("j1", twoSlots(), tc.emitted, ProblemNone, tc.prevented)
@@ -263,17 +267,19 @@ func TestMaterializeSlotsAvailability(t *testing.T) {
 }
 
 func TestMaterializeSlotsPayloadProblems(t *testing.T) {
-	problems := []PayloadProblem{ProblemUnparseable, ProblemTopLevelShape, ProblemDuplicateJSONKey,
-		ProblemUnknownTopField, ProblemSchemaVersion, ProblemUnboundResult, ProblemSizeLimit}
+	problems := []PayloadProblem{
+		ProblemUnparseable, ProblemTopLevelShape, ProblemDuplicateJSONKey,
+		ProblemUnknownTopField, ProblemSchemaVersion, ProblemUnboundResult, ProblemSizeLimit,
+	}
 	for _, p := range problems {
 		t.Run(string(p), func(t *testing.T) {
 			// A well-formed pair of scores must still be discarded, because the
 			// envelope as a whole cannot be trusted.
 			emitted := []EmittedMetric{
-				{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.8)},
-				{MetricID: "completeness", Availability: "AVAILABLE", Value: f(0.6)},
+				{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.8)},
+				{MetricID: "completeness", Availability: "AVAILABLE", Value: new(0.6)},
 			}
-			env := MaterializeSlots("j1", twoSlots(), emitted, p, false)
+			env := MaterializeSlots("j1", twoSlots(), emitted, p, MetricProduced)
 			for _, m := range env.Metrics {
 				if m.Availability != Errored || m.Reason != string(p) || m.Value != nil {
 					t.Fatalf("slot %s = %+v, want ERROR/%s with no value", m.MetricID, m, p)
@@ -292,11 +298,11 @@ func TestMaterializeSlotsPayloadProblems(t *testing.T) {
 func TestSlotLevelDefectKeepsSiblingsUsable(t *testing.T) {
 	planned := []MetricSlot{{ID: "correctness", Required: true}, {ID: "completeness"}, {ID: "instruction_following"}}
 	emitted := []EmittedMetric{
-		{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.9)},
-		{MetricID: "completeness", Availability: "AVAILABLE", Value: f(2.5)}, // invalid
-		{MetricID: "instruction_following", Availability: "AVAILABLE", Value: f(0.5)},
+		{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.9)},
+		{MetricID: "completeness", Availability: "AVAILABLE", Value: new(2.5)}, // invalid
+		{MetricID: "instruction_following", Availability: "AVAILABLE", Value: new(0.5)},
 	}
-	env := MaterializeSlots("j1", planned, emitted, ProblemNone, false)
+	env := MaterializeSlots("j1", planned, emitted, ProblemNone, MetricProduced)
 	if env.Metrics[0].Availability != Available || env.Metrics[2].Availability != Available {
 		t.Fatalf("valid siblings must stay AVAILABLE: %+v", env.Metrics)
 	}
@@ -317,9 +323,9 @@ func TestSlotLevelDefectKeepsSiblingsUsable(t *testing.T) {
 func TestEvidenceRequirementIsPerSlot(t *testing.T) {
 	planned := []MetricSlot{{ID: "correctness", EvidenceRequired: true}, {ID: "completeness"}}
 	env := MaterializeSlots("j1", planned, []EmittedMetric{
-		{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.8)},
-		{MetricID: "completeness", Availability: "AVAILABLE", Value: f(0.8)},
-	}, ProblemNone, false)
+		{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.8)},
+		{MetricID: "completeness", Availability: "AVAILABLE", Value: new(0.8)},
+	}, ProblemNone, MetricProduced)
 	if env.Metrics[0].Availability != Errored || env.Metrics[0].Reason != "missing_evidence" {
 		t.Fatalf("evidence-less slot = %+v", env.Metrics[0])
 	}
@@ -329,7 +335,7 @@ func TestEvidenceRequirementIsPerSlot(t *testing.T) {
 }
 
 func TestCoverageWithoutPlannedSlotsStaysNull(t *testing.T) {
-	env := MaterializeSlots("j1", nil, nil, ProblemNone, false)
+	env := MaterializeSlots("j1", nil, nil, ProblemNone, MetricProduced)
 	if env.Coverage.Planned != 0 || env.Coverage.Ratio != nil {
 		t.Fatalf("coverage = %+v, want planned 0 and null ratio", env.Coverage)
 	}
@@ -341,7 +347,7 @@ func TestCoverageWithoutPlannedSlotsStaysNull(t *testing.T) {
 func TestSlotsFromConfigKeepsThePlannedDenominator(t *testing.T) {
 	registry := []config.MetricConfig{
 		{ID: "correctness", Required: true, EvidenceRequired: true},
-		{ID: "completeness", MinScore: f(0.75)},
+		{ID: "completeness", MinScore: new(0.75)},
 	}
 	slots := SlotsFromConfig(registry)
 	if len(slots) != 2 {
@@ -357,7 +363,7 @@ func TestSlotsFromConfigKeepsThePlannedDenominator(t *testing.T) {
 		t.Fatal("a judge without a registry must keep no slots")
 	}
 	// The registry, not a returned payload, sets the denominator.
-	env := MaterializeSlots("j1", slots, []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: f(0.9)}}, ProblemNone, false)
+	env := MaterializeSlots("j1", slots, []EmittedMetric{{MetricID: "correctness", Availability: "AVAILABLE", Value: new(0.9)}}, ProblemNone, MetricProduced)
 	if env.Coverage.Planned != 2 {
 		t.Fatalf("planned = %d, want the registry count of 2", env.Coverage.Planned)
 	}
@@ -410,7 +416,7 @@ func TestClassifyStop(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ClassifyStop(tc.err, tc.deadlineSource, tc.signal)
+			got := ClassifyStop(tc.err, StopObservation{DeadlineSource: tc.deadlineSource, SignalObserved: tc.signal})
 			if got != tc.want {
 				t.Fatalf("ClassifyStop = %+v, want %+v", got, tc.want)
 			}
