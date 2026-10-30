@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -255,12 +256,310 @@ func TestExecuteCaseSingleScriptMetricContractControlsVerdict(t *testing.T) {
 
 func metricsPayloadScript(t *testing.T, dir, payload string) string {
 	t.Helper()
+	return metricsScriptWithTail(t, dir, payload, "exit 0\n")
+}
+
+// metricsScriptWithTail writes an invocation-bound result file, then runs tail,
+// which carries the script's own wait and exit status.
+func metricsScriptWithTail(t *testing.T, dir, payload, tail string) string {
+	t.Helper()
 	if goruntime.GOOS == windowsGOOS {
-		body := "$body = '" + payload + "' -replace '__INVOCATION__', $env:EVAL_METRICS_INVOCATION_ID\nSet-Content -LiteralPath $env:EVAL_METRICS_RESULT_PATH -Value $body\nexit 0\n"
+		body := "$body = '" + payload + "' -replace '__INVOCATION__', $env:EVAL_METRICS_INVOCATION_ID\nSet-Content -LiteralPath $env:EVAL_METRICS_RESULT_PATH -Value $body\n" + tail
 		return metricsScript(t, dir, body)
 	}
-	body := "#!/bin/sh\ncat > \"$EVAL_METRICS_RESULT_PATH\" <<JSON\n" + strings.ReplaceAll(payload, "__INVOCATION__", "$EVAL_METRICS_INVOCATION_ID") + "\nJSON\nexit 0\n"
+	body := "#!/bin/sh\ncat > \"$EVAL_METRICS_RESULT_PATH\" <<JSON\n" + strings.ReplaceAll(payload, "__INVOCATION__", "$EVAL_METRICS_INVOCATION_ID") + "\nJSON\n" + tail
 	return metricsScript(t, dir, body)
+}
+
+// scorePayload emits one AVAILABLE correctness metric with the given value.
+func scorePayload(value string) string {
+	return `{"schema_version":1,"invocation_id":"__INVOCATION__","metrics":[{"metric_id":"correctness","availability":"AVAILABLE","value":` + value + `}]}`
+}
+
+// thresholdRegistry plans one required correctness metric with a 0.8 threshold.
+func thresholdRegistry() []config.MetricConfig {
+	return []config.MetricConfig{{ID: "correctness", Required: true, MinScore: new(0.8)}}
+}
+
+// outlivesDeadline waits past any judge deadline in the fixture's configuration.
+func outlivesDeadline() string {
+	return pick("sleep 6\nexit 0\n", "Start-Sleep -Seconds 6\nexit 0\n")
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func assertTimeoutProvenance(t *testing.T, ex *judge.ExecutionMetadata) {
+	t.Helper()
+	if ex == nil || ex.Cause != judge.CauseDeadlineExpiry || ex.DeadlineSource != judgeTimeoutSource ||
+		ex.Timeout == nil || !ex.Timeout.Occurred {
+		t.Fatalf("timeout provenance = %+v", ex)
+	}
+}
+
+func assertCollectedScoreAndDecision(t *testing.T, env *judge.MetricsEnvelope, want float64, quality judge.Quality, diagnostic string) {
+	t.Helper()
+	if env == nil || env.Coverage.Available != 1 || len(env.Metrics) != 1 {
+		t.Fatalf("metrics = %+v, want one AVAILABLE slot", env)
+	}
+	if env.Metrics[0].Value == nil || *env.Metrics[0].Value != want {
+		t.Fatalf("collected score = %+v, want %v", env.Metrics[0], want)
+	}
+	if env.Quality != quality {
+		t.Fatalf("quality = %s, want %s", env.Quality, quality)
+	}
+	if !slices.Contains(env.Diagnostics, diagnostic) {
+		t.Fatalf("diagnostics = %v, want %q", env.Diagnostics, diagnostic)
+	}
+}
+
+// TestExecuteCaseGroupedTimeoutBelowThresholdKeepsRetryableError reproduces the
+// reported interaction: the script writes a valid below-threshold score and is
+// then killed by its own deadline. Both facts are real, so both must be
+// reported - but the numerical decision may not replace the execution ERROR
+// that makes the case retryable as a timeout.
+func TestExecuteCaseGroupedTimeoutBelowThresholdKeepsRetryableError(t *testing.T) {
+	scratch := metricsScratchDir(t)
+	slowDir := filepath.Join(scratch, "slow")
+	if err := os.MkdirAll(slowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	two := 2
+	members := []config.JudgeConfig{{
+		ID: "scorer", Type: "script",
+		ScriptPath:     metricsScriptWithTail(t, slowDir, scorePayload("0.2"), outlivesDeadline()),
+		TimeoutSeconds: &two,
+		Metrics:        thresholdRegistry(),
+	}}
+	e := newTestEvaluator(EvalOptions{
+		Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(),
+		EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judges: &members},
+	})
+	result := e.executeCase(context.Background(), &config.CaseConfig{ID: "timeout-threshold", Input: config.Input{Prompt: "hello"}}, "with_skill", newScratchRuntime(t, scratch), nil)
+
+	if len(result.JudgeResults) != 1 {
+		t.Fatalf("outcomes = %d", len(result.JudgeResults))
+	}
+	member := result.JudgeResults[0]
+	assertTimeoutProvenance(t, member.Execution)
+	if member.Status != judge.StatusError {
+		t.Fatalf("member verdict = %s, want ERROR: a threshold miss may not downgrade an execution error", member.Status)
+	}
+	if result.Status != judge.StatusError {
+		t.Fatalf("case verdict = %s, want ERROR", result.Status)
+	}
+	assertCollectedScoreAndDecision(t, member.Metrics, 0.2, judge.QualityNotMet, "threshold_not_met: correctness")
+	if reason, ok := retryReasonForResult(result); !ok || reason != retryReasonTimeout {
+		t.Fatalf("retry classification = %q/%v, want a retryable timeout", reason, ok)
+	}
+}
+
+// TestExecuteCaseSingleTimeoutBelowThresholdKeepsLegacyVerdict covers the same
+// interaction on the single-judge path, where the pre-existing script-timeout
+// mapping already produced FAIL. The verdict and the compatibility counts must
+// stay exactly as the execution layer reported them.
+func TestExecuteCaseSingleTimeoutBelowThresholdKeepsLegacyVerdict(t *testing.T) {
+	scratch := metricsScratchDir(t)
+	dir := t.TempDir()
+	one := 1
+	member := config.JudgeConfig{
+		ID: "scorer", Type: "script",
+		ScriptPath:     metricsScriptWithTail(t, dir, scorePayload("0.2"), outlivesDeadline()),
+		TimeoutSeconds: &one,
+		Metrics:        thresholdRegistry(),
+	}
+	e := newTestEvaluator(EvalOptions{
+		Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(),
+		EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judge: member},
+	})
+	result := e.executeCase(context.Background(), &config.CaseConfig{ID: "single-timeout-threshold", Input: config.Input{Prompt: "hello"}}, "with_skill", newScratchRuntime(t, scratch), nil)
+
+	if result.Status != judge.StatusFail {
+		t.Fatalf("status = %s error=%v, want the legacy timeout FAIL", result.Status, result.Error)
+	}
+	assertTimeoutProvenance(t, result.Execution)
+	assertCollectedScoreAndDecision(t, result.Metrics, 0.2, judge.QualityNotMet, "threshold_not_met: correctness")
+	want := judge.ResultSummary{Failed: 1, Total: 1}
+	if result.Grading == nil || result.Grading.Summary != want {
+		t.Fatalf("compatibility denominators = %+v, want %+v", result.Grading, want)
+	}
+}
+
+// TestExecuteCaseNonzeroExitAfterWritingMetricsKeepsProcessFailure addresses the
+// reclassification of a failed process as a missing-required-score contract
+// error. The script writes a score that would clear the threshold and then exits
+// 3: the file is diagnostic-only, the slots were never produced, and the verdict
+// stays FAIL with cause process_exit on both paths.
+func TestExecuteCaseNonzeroExitAfterWritingMetricsKeepsProcessFailure(t *testing.T) {
+	payload, tail := scorePayload("0.9"), "exit 3\n"
+	registry := thresholdRegistry()
+	t.Run("single", func(t *testing.T) {
+		dir := t.TempDir()
+		limit := 30
+		member := config.JudgeConfig{ID: "scorer", Type: "script", ScriptPath: metricsScriptWithTail(t, dir, payload, tail), TimeoutSeconds: &limit, Metrics: registry}
+		e := newTestEvaluator(EvalOptions{
+			Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(),
+			EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judge: member},
+		})
+		result := e.executeCase(context.Background(), &config.CaseConfig{ID: "exit-three", Input: config.Input{Prompt: "hello"}}, "with_skill", newScriptRuntime(t), nil)
+		assertProcessFailure(t, result.Status, errorText(result.Error), result.Execution, result.Metrics)
+	})
+	t.Run("grouped", func(t *testing.T) {
+		dir := t.TempDir()
+		limit := 30
+		members := []config.JudgeConfig{{ID: "scorer", Type: "script", ScriptPath: metricsScriptWithTail(t, dir, payload, tail), TimeoutSeconds: &limit, Metrics: registry}}
+		e := newTestEvaluator(EvalOptions{
+			Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(),
+			EvalCfg: &config.EvalConfig{Environment: config.Environment{Type: "none"}, Judges: &members},
+		})
+		result := e.executeCase(context.Background(), &config.CaseConfig{ID: "exit-three-grouped", Input: config.Input{Prompt: "hello"}}, "with_skill", newScriptRuntime(t), nil)
+		if len(result.JudgeResults) != 1 {
+			t.Fatalf("outcomes = %d", len(result.JudgeResults))
+		}
+		member := result.JudgeResults[0]
+		assertProcessFailure(t, member.Status, member.Error, member.Execution, member.Metrics)
+		if result.Status != judge.StatusFail {
+			t.Fatalf("group verdict = %s, want FAIL", result.Status)
+		}
+		if result.GroupCompletion != judge.CompletionFailed || result.GroupCause != judge.CauseProcessExit {
+			t.Fatalf("group = %s/%s, want FAILED/process_exit", result.GroupCompletion, result.GroupCause)
+		}
+	})
+}
+
+func assertProcessFailure(t *testing.T, status judge.Status, errorText string, ex *judge.ExecutionMetadata, env *judge.MetricsEnvelope) {
+	t.Helper()
+	if status != judge.StatusFail {
+		t.Fatalf("status = %s, want FAIL: an unsuccessful process outranks score validation", status)
+	}
+	if strings.Contains(errorText, "named metric") {
+		t.Fatalf("a metric contract complaint replaced the process failure: %q", errorText)
+	}
+	if ex == nil || ex.Stage != judge.StageFinished || ex.Completion != judge.CompletionFailed || ex.Cause != judge.CauseProcessExit {
+		t.Fatalf("execution = %+v, want FINISHED/FAILED/process_exit", ex)
+	}
+	if env == nil || env.Coverage.Planned != 1 || env.Coverage.NotProduced != 1 || env.Coverage.Available != 0 {
+		t.Fatalf("metrics = %+v, want the planned slot NOT_PRODUCED", env)
+	}
+	if env.Quality != judge.QualityUnknown {
+		t.Fatalf("quality = %s, want UNKNOWN for an unproduced thresholded slot", env.Quality)
+	}
+	if !slices.Contains(env.Diagnostics, "result_file_not_accepted") {
+		t.Fatalf("diagnostics = %v, want the written file recorded as unaccepted", env.Diagnostics)
+	}
+}
+
+// TestExecuteCaseMetricPolicyKeepsCompatibilityDenominators pins the agreed
+// separation: a metric decision may change the verdict, but it never adds a
+// compatibility assertion or a member denominator entry.
+// scriptMetricMember builds one script judge whose script emits payload.
+func scriptMetricMember(t *testing.T, id, payload string, registry []config.MetricConfig) config.JudgeConfig {
+	t.Helper()
+	limit := 30
+	return config.JudgeConfig{
+		ID:             id,
+		Type:           "script",
+		ScriptPath:     metricsPayloadScript(t, t.TempDir(), payload),
+		TimeoutSeconds: &limit,
+		Metrics:        registry,
+	}
+}
+
+// evaluateMetricPolicyCase runs one case through the real evaluator with the
+// given members: a single member takes the single-judge path, more than one the
+// grouped path.
+func evaluateMetricPolicyCase(t *testing.T, members []config.JudgeConfig) EvalResult {
+	t.Helper()
+	cfg := &config.EvalConfig{Environment: config.Environment{Type: "none"}}
+	if len(members) == 1 {
+		cfg.Judge = members[0]
+	} else {
+		list := members
+		cfg.Judges = &list
+	}
+	e := newTestEvaluator(EvalOptions{
+		Agent: &mockAgent{name: "test", output: "done"}, OutputDir: t.TempDir(), EvalCfg: cfg,
+	})
+	return e.executeCase(context.Background(), &config.CaseConfig{ID: "metric-denominators", Input: config.Input{Prompt: "hello"}}, "with_skill", newScriptRuntime(t), nil)
+}
+
+// TestExecuteCaseThresholdMissChangesOnlyTheVerdict pins the agreed separation:
+// a configured threshold may decide the verdict, but it must not add a
+// compatibility assertion or a denominator entry, because those carry #309
+// arithmetic into reports and benchmark projections.
+func TestExecuteCaseThresholdMissChangesOnlyTheVerdict(t *testing.T) {
+	result := evaluateMetricPolicyCase(t, []config.JudgeConfig{scriptMetricMember(t, "scorer", scorePayload("0.4"), thresholdRegistry())})
+	if result.Status != judge.StatusFail {
+		t.Fatalf("status = %s, want FAIL", result.Status)
+	}
+	if result.Grading == nil {
+		t.Fatal("grading is nil")
+	}
+	if want := (judge.ResultSummary{Passed: 1, Total: 1, PassRate: 1}); result.Grading.Summary != want {
+		t.Fatalf("summary = %+v, want %+v", result.Grading.Summary, want)
+	}
+	assertNoMetricContractAssertion(t, result.Grading)
+	if !slices.Contains(result.Metrics.Diagnostics, "threshold_not_met: correctness") {
+		t.Fatalf("diagnostics = %v, want the missed threshold recorded", result.Metrics.Diagnostics)
+	}
+}
+
+// TestExecuteCaseGroupedThresholdMissKeepsOneAssertionPerMember is the grouped
+// counterpart: the group keeps one assertion per configured member and each
+// member keeps its own script assertion alone.
+func TestExecuteCaseGroupedThresholdMissKeepsOneAssertionPerMember(t *testing.T) {
+	registry := thresholdRegistry()
+	result := evaluateMetricPolicyCase(t, []config.JudgeConfig{
+		scriptMetricMember(t, "a", scorePayload("0.4"), registry),
+		scriptMetricMember(t, "b", scorePayload("0.3"), registry),
+	})
+	if result.Status != judge.StatusFail || len(result.JudgeResults) != 2 {
+		t.Fatalf("status = %s outcomes = %d", result.Status, len(result.JudgeResults))
+	}
+	if result.Grading == nil || result.Grading.Summary.Total != 2 || result.Grading.Summary.Passed != 0 {
+		t.Fatalf("group summary = %+v, want one assertion per member", result.Grading)
+	}
+	assertNoMetricContractAssertion(t, result.Grading)
+	for _, member := range result.JudgeResults {
+		if member.Result == nil {
+			t.Fatalf("member %s has no grading", member.ID)
+		}
+		if want := (judge.ResultSummary{Passed: 1, Total: 1, PassRate: 1}); member.Result.Summary != want {
+			t.Fatalf("member %s summary = %+v, want the script assertion alone", member.ID, member.Result.Summary)
+		}
+		assertNoMetricContractAssertion(t, member.Result)
+	}
+}
+
+// TestExecuteCaseMetricContractErrorKeepsCompatibilityCounts applies the same
+// rule to the ERROR side of the metric policy.
+func TestExecuteCaseMetricContractErrorKeepsCompatibilityCounts(t *testing.T) {
+	result := evaluateMetricPolicyCase(t, []config.JudgeConfig{
+		scriptMetricMember(t, "scorer", `{"schema_version":1,"invocation_id":"__INVOCATION__","metrics":[]}`, thresholdRegistry()),
+	})
+	if result.Status != judge.StatusError || result.Error == nil {
+		t.Fatalf("status = %s error = %v, want ERROR with a contract reason", result.Status, result.Error)
+	}
+	if result.Grading == nil {
+		t.Fatal("grading is nil")
+	}
+	if result.Grading.Summary.Total != 1 || result.Grading.Summary.Passed != 1 {
+		t.Fatalf("summary = %+v, want the script assertion alone", result.Grading.Summary)
+	}
+	assertNoMetricContractAssertion(t, result.Grading)
+}
+
+func assertNoMetricContractAssertion(t *testing.T, result *judge.Result) {
+	t.Helper()
+	for _, assertion := range result.AssertionResults {
+		if assertion.Text == "named metric contract" {
+			t.Fatalf("metric policy injected a compatibility assertion: %+v", result.AssertionResults)
+		}
+	}
 }
 
 func TestExecuteCaseExpectGatePreservesSingleJudgeSlots(t *testing.T) {
