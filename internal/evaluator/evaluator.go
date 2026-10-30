@@ -1162,12 +1162,17 @@ func retryAllowed(policy config.RetryPolicy, reason string) bool {
 	return false
 }
 
+// retryReasonTimeout is the retry_policy reason a case fails with when a
+// deadline expired; it must survive a metric policy decision so the case stays
+// retryable for the right reason.
+const retryReasonTimeout = "timeout"
+
 func retryReasonForResult(result EvalResult) (string, bool) {
 	if result.Status != judge.StatusError || result.Error == nil {
 		return "", false
 	}
 	if isTimeoutError(result.Error) {
-		return "timeout", true
+		return retryReasonTimeout, true
 	}
 	return "error", true
 }

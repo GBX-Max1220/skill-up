@@ -157,14 +157,7 @@ func (j *ScriptJudge) evaluateInRuntime(ctx context.Context, rt evalruntime.Runt
 		}
 	}
 	if result.ExitCode != 0 {
-		detail := evidence
-		if detail == "" {
-			detail = fmt.Sprintf("script exited with code %d", result.ExitCode)
-		}
-		res := j.buildResult(false, detail, debugInfo, in)
-		// A nonzero exit never collects scores as a valid result (row P5): the file
-		// stays a diagnostic artifact only.
-		return res, nil
+		return j.unsuccessfulExitResult(evidence, debugInfo, result.ExitCode, in), nil
 	}
 
 	if evidence == "" {
@@ -211,6 +204,53 @@ func (j *ScriptJudge) buildResult(passed bool, evidence, debugInfo string, in In
 	return NewResult([]AssertionResult{assertion}, in.TurnsExecuted, in.TurnsTotal)
 }
 
+// unsuccessfulExitResult maps a nonzero script exit onto the legacy FAIL verdict.
+// With a metric registry configured, the execution record names the exit as the
+// reason the case failed and no score the script wrote can be accepted: an
+// unsuccessful process must not be reported as omitted scoring output.
+func (j *ScriptJudge) unsuccessfulExitResult(evidence, debugInfo string, exitCode int, in Input) *Result {
+	detail := evidence
+	if detail == "" {
+		detail = fmt.Sprintf("script exited with code %d", exitCode)
+	}
+	res := j.buildResult(false, detail, debugInfo, in)
+	if len(j.MetricSlots) == 0 {
+		return res
+	}
+	res.Execution = &ExecutionMetadata{
+		Stage:      StageFinished,
+		Completion: CompletionFailed,
+		Cause:      CauseProcessExit,
+		Detail:     detail,
+	}
+	res.Metrics = j.declinedMetrics()
+	return res
+}
+
+// producerID is the judge identity recorded in a metric envelope: the configured
+// id, falling back to the judge type when a judge was built without one.
+func (j *ScriptJudge) producerID() string {
+	if j.MetricJudgeID != "" {
+		return j.MetricJudgeID
+	}
+	return "script"
+}
+
+// declinedMetrics materializes every planned slot as NOT_PRODUCED for a script
+// that exited unsuccessfully. The result file is deliberately not read: it stays
+// a diagnostic artifact, and its presence is noted so the run is explainable
+// without pretending a failed process produced a score.
+func (j *ScriptJudge) declinedMetrics() *MetricsEnvelope {
+	judgeID := j.producerID()
+	env := MaterializeSlots(judgeID, j.MetricSlots, nil, ProblemNone, MetricPrevented)
+	if j.MetricsResultPath != "" {
+		if info, err := os.Lstat(j.MetricsResultPath); err == nil && info.Mode().IsRegular() {
+			env.AddDiagnostic("result_file_not_accepted")
+		}
+	}
+	return env
+}
+
 // attachMetrics collects this invocation's structured metric result file and
 // materializes one slot per planned registry entry onto the judge result.
 //
@@ -225,10 +265,7 @@ func (j *ScriptJudge) attachMetrics(res *Result, production MetricProduction) {
 	if res == nil || len(j.MetricSlots) == 0 {
 		return
 	}
-	judgeID := j.MetricJudgeID
-	if judgeID == "" {
-		judgeID = "script"
-	}
+	judgeID := j.producerID()
 	if j.MetricsResultPath == "" {
 		// The channel is not available for this judge (a non-local runtime, or a
 		// judge built without one). Report that honestly rather than implying a

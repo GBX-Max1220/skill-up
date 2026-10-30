@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -197,6 +198,18 @@ type MetricsEnvelope struct {
 	Quality     Quality        `json:"metric_quality_state"`
 	Coverage    Coverage       `json:"coverage"`
 	Diagnostics []string       `json:"diagnostics,omitempty"`
+}
+
+// AddDiagnostic records an informational note about the metric pass. Diagnostics
+// are additive output detail: they never create a planned slot, change coverage,
+// or alter a verdict, so a policy decision can be evidenced without touching the
+// compatibility assertion or member denominators.
+func (e *MetricsEnvelope) AddDiagnostic(note string) {
+	if e == nil || note == "" || slices.Contains(e.Diagnostics, note) {
+		return
+	}
+	e.Diagnostics = append(e.Diagnostics, note)
+	sort.Strings(e.Diagnostics)
 }
 
 // ExecutionMetadata preserves how far evaluation got and why it stopped. It is

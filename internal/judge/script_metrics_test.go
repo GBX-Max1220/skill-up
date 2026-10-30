@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,8 +29,9 @@ type metricsScriptCase struct {
 	expectValues       map[string]float64
 	expectQuality      Quality
 	expectPlanned      int
-	expectNilEnvelope  bool
 	expectReasons      map[string]string
+	// expectDiagnostic is one required entry of the envelope's diagnostics list.
+	expectDiagnostic string
 }
 
 func (tc metricsScriptCase) scriptName() string {
@@ -228,11 +230,21 @@ func metricsScriptAdditionalCases() []metricsScriptCase {
 			},
 		},
 		{
-			name:              "valid file then nonzero exit collects nothing",
-			posix:             posixValidFileThenFail,
-			windows:           windowsValidFileThenFail,
-			registry:          twoMetricRegistry(),
-			expectNilEnvelope: true,
+			// A nonzero exit is an unsuccessful process: nothing it wrote can become
+			// a score, and the planned slots record that instead of looking omitted.
+			name:     "valid file then nonzero exit collects no score",
+			posix:    posixValidFileThenFail,
+			windows:  windowsValidFileThenFail,
+			registry: twoMetricRegistry(),
+			expectAvailability: map[string]Availability{
+				"correctness": NotProduced, "completeness": NotProduced,
+			},
+			expectReasons: map[string]string{
+				"correctness": "evaluation_prevented", "completeness": "evaluation_prevented",
+			},
+			expectQuality:    QualityNotAssessed,
+			expectPlanned:    2,
+			expectDiagnostic: "result_file_not_accepted",
 		},
 		{
 			name:     "judge-declared SKIP keeps its own reason",
@@ -284,14 +296,8 @@ func TestScriptJudgeCollectsNamedMetrics(t *testing.T) {
 func checkMetricsScriptCase(t *testing.T, tc metricsScriptCase) {
 	t.Helper()
 	res := runMetricsScriptCase(t, tc)
-	if tc.expectNilEnvelope {
-		if res.Metrics != nil {
-			t.Fatalf("expected no envelope after a nonzero exit, got %+v", res.Metrics)
-		}
-		return
-	}
 	if res.Metrics == nil {
-		t.Fatal("expected a metrics envelope from the collected file")
+		t.Fatal("a configured registry must report one slot per planned metric")
 	}
 	env := res.Metrics
 	if env.Coverage.Planned != tc.expectPlanned {
@@ -304,6 +310,9 @@ func checkMetricsScriptCase(t *testing.T, tc metricsScriptCase) {
 		t.Fatalf("quality = %s, want %s", env.Quality, tc.expectQuality)
 	}
 	checkMetricValues(t, env, tc)
+	if tc.expectDiagnostic != "" && !slices.Contains(env.Diagnostics, tc.expectDiagnostic) {
+		t.Fatalf("diagnostics = %v, want %q", env.Diagnostics, tc.expectDiagnostic)
+	}
 	// The verdict mapping itself must not change because metrics exist.
 	if res.Status != StatusPass && !tc.nameIsFailing() {
 		t.Fatalf("status = %s, expected the legacy PASS for a zero-exit script", res.Status)

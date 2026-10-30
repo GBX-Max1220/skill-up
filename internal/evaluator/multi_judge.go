@@ -251,6 +251,12 @@ func memberExecution(graded EvalResult, stop judge.Stop, decision MemberDecision
 }
 
 func acceptedMemberExecution(graded EvalResult, stop judge.Stop, planned []judge.MetricSlot) *judge.ExecutionMetadata {
+	// A judge that reported how its own pass ended outranks a completion derived
+	// from slots: a script that exited unsuccessfully keeps FAILED/process_exit
+	// even though it reached a final outcome.
+	if graded.Execution != nil && graded.Execution.Cause == judge.CauseProcessExit {
+		return graded.Execution
+	}
 	completion := judge.CompletionFinished
 	env := graded.Metrics
 	if graded.Grading != nil && graded.Grading.Metrics != nil {
